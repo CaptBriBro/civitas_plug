@@ -108,6 +108,26 @@
 						<Alert tone="error" message={error} />
 					{/if}
 
+					<div class="space-y-2 border-y border-[#E7DFD5] py-3 my-2">
+						<span class="text-xs font-bold text-[#1C1917] block">Requisiti per la sottomissione:</span>
+						<ul class="space-y-2">
+							{#each preview.checklist || [] as item}
+								<li class="flex items-start gap-2 text-xs">
+									{#if item.satisfied}
+										<span class="text-emerald-600 font-bold select-none">✔</span>
+										<span class="text-stone-500 line-through">{item.label}</span>
+									{:else}
+										<span class="text-rose-500 font-bold select-none">❌</span>
+										<div class="flex flex-col">
+											<span class="text-stone-800 font-semibold">{item.label}</span>
+											<span class="text-[10px] text-stone-500 font-serif leading-tight mt-0.5">{item.help}</span>
+										</div>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					</div>
+
 					<div>
 						<label for="submit-proposal-reason" class="text-xs text-[#1C1917] font-semibold block mb-1">Motivazione o nota della proposta:</label>
 						<TextArea id="submit-proposal-reason" bind:value={reason} rows={3} placeholder="Motivazione della proposta…" />
@@ -116,7 +136,7 @@
 					{#if !preview.canSubmit}
 						<Alert tone="info" message={preview.blockingReason ?? ''}>
 							{#if !authStore.isLinked}
-								<Button size="sm" variant="ai" onclick={() => { closeModal(); router.go('#/link'); }}>
+								<Button size="sm" variant="ai" onclick={() => { closeModal(); router.go('#/settings'); }}>
 									Collega l'account
 								</Button>
 							{/if}

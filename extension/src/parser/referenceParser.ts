@@ -33,10 +33,8 @@ function normalizeArticleNumber(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-');
 }
 
-/** Un articolo apre sempre col proprio numero come intestazione
- *  ("Art. 17. (Rubrica) ..."): senza questo controllo verrebbe letto come un
- *  rinvio a se stesso invece che come la propria etichetta. */
 function isSelfReference(candidate: ReferenceCandidate, ownNumero?: string): boolean {
+  if (candidate.type !== 'article_reference') return false;
   if (!ownNumero || !candidate.parsed?.article) return false;
   return normalizeArticleNumber(candidate.parsed.article) === normalizeArticleNumber(ownNumero);
 }

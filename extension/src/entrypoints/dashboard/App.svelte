@@ -7,7 +7,7 @@
 	import JobView from '@/views/JobView.svelte';
 	import BatchView from '@/views/BatchView.svelte';
 	import BatchComparisonView from '@/views/BatchComparisonView.svelte';
-	import LinkView from '@/views/LinkView.svelte';
+	import DownloadedPromptsView from '@/views/DownloadedPromptsView.svelte';
 	import SettingsView from '@/views/SettingsView.svelte';
 	import { router } from '@/router.svelte';
 	import { settingsStore } from '@/stores/settings.svelte';
@@ -50,8 +50,8 @@
 					<BatchView jobId={router.route.jobId} batchId={router.route.batchId} />
 				{:else if router.route.name === 'batch-compare' && router.route.jobId && router.route.batchId}
 					<BatchComparisonView jobId={router.route.jobId} batchId={router.route.batchId} />
-				{:else if router.route.name === 'link'}
-					<LinkView />
+				{:else if router.route.name === 'prompts'}
+					<DownloadedPromptsView />
 				{:else if router.route.name === 'settings'}
 					<SettingsView />
 				{/if}

@@ -15,6 +15,8 @@
 	import { authStore } from '@/stores/auth.svelte';
 	import { worksetStore } from '@/stores/workset.svelte';
 	import { openDashboard } from '@/services/browser/browserService';
+	import { onEvent } from '@/messaging/messages';
+	import { saveActiveBatchSelection, watchActiveBatchSelection, getActiveBatchSelection } from '@/services/storage/worksetStore';
 	import type { Workset, WorksetBatch } from '@/domain/workset';
 
 	let selectedWorkset = $state<Workset | null>(null);
@@ -22,6 +24,10 @@
 	let batchExpanded = $state(false);
 
 	let activeWorkset = $derived(worksetStore.workset || selectedWorkset);
+	let isUpdatesTask = $derived(
+		(activeWorkset?.actUpdates?.length || 0) > 0 ||
+		activeWorkset?.jobTitle?.includes('Aggiornamenti')
+	);
 
 	let activeBatch = $derived.by(() => {
 		if (!activeWorkset || !activeWorkset.batches || activeWorkset.batches.length === 0) return null;
@@ -29,6 +35,14 @@
 			return activeWorkset.batches.find((b) => b.id === selectedBatchId) ?? activeWorkset.batches[0];
 		}
 		return activeWorkset.batches[0];
+	});
+
+	let activeUpdates = $derived.by(() => {
+		if (!activeWorkset || !activeBatch || !activeWorkset.actUpdates) return [];
+		const wanted = new Set(activeBatch.articleNumbers);
+		return activeWorkset.actUpdates.filter(
+			(u, idx) => wanted.has(String(idx)) || (u.progr ? wanted.has(u.progr) : false)
+		);
 	});
 
 	let activeArticles = $derived.by(() => {
@@ -64,12 +78,49 @@
 		const stopAuthWatch = authStore.watch();
 		const stopPolling = activityStore.startPolling();
 
+		// Leggi la selezione del batch attivo all'avvio
+		void getActiveBatchSelection().then(async (selection) => {
+			if (selection) {
+				selectedBatchId = selection.batchId;
+				await worksetStore.load(selection.jobId);
+				selectedWorkset = worksetStore.workset;
+			}
+		});
+
+		// Ascolta i cambiamenti di selezione del batch attivo
+		const stopActiveBatchWatch = watchActiveBatchSelection(async (selection) => {
+			if (selection) {
+				selectedBatchId = selection.batchId;
+				await worksetStore.load(selection.jobId);
+				selectedWorkset = worksetStore.workset;
+				batchExpanded = false;
+			} else {
+				selectedWorkset = null;
+				selectedBatchId = null;
+				batchExpanded = false;
+				worksetStore.workset = null;
+			}
+		});
+
+		// Ascolta i messaggi diretti per la selezione immediata
+		const stopEventWatch = onEvent(async (event) => {
+			if (event.type === 'SELECT_BATCH') {
+				selectedBatchId = event.batchId;
+				await worksetStore.load(event.jobId);
+				selectedWorkset = worksetStore.workset;
+				batchExpanded = false;
+			}
+		});
+
 		return () => {
 			stopAuthWatch();
 			stopPolling();
+			stopActiveBatchWatch();
+			stopEventWatch();
 		};
 	});
 
+	// Riferimento a funzioni definite nello script
 	function openJob(workset: Workset): void {
 		void openDashboard(`#/job/${encodeURIComponent(workset.jobId)}`);
 	}
@@ -79,12 +130,15 @@
 		selectedBatchId = batch.id;
 		batchExpanded = false;
 		void worksetStore.load(workset.jobId);
+		void saveActiveBatchSelection({ jobId: workset.jobId, batchId: batch.id });
 	}
 
 	function clearBatchSelection(): void {
 		selectedWorkset = null;
 		selectedBatchId = null;
 		batchExpanded = false;
+		worksetStore.workset = null;
+		void saveActiveBatchSelection(null);
 		void activityStore.refresh();
 	}
 </script>
@@ -126,7 +180,11 @@
 									Batch {activeBatch.id}
 								</h2>
 								<p class="text-[11px] text-[#78716C] truncate">
-									{activeWorkset.jobTitle} ({activeBatch.articleNumbers.length} articoli: artt. {activeBatch.articleNumbers.join(', ')})
+									{#if isUpdatesTask}
+										{activeWorkset.jobTitle} ({activeUpdates.length} novelle/modifiche)
+									{:else}
+										{activeWorkset.jobTitle} ({activeBatch.articleNumbers.length} articoli: artt. {activeBatch.articleNumbers.join(', ')})
+									{/if}
 								</p>
 							</div>
 						</div>
@@ -142,12 +200,31 @@
 					{#if batchExpanded}
 						<div class="p-3.5 border-t border-[#E7DFD5] bg-[#FAF6F0] space-y-3 animate-in fade-in">
 							<div class="space-y-2 max-h-72 overflow-y-auto pr-1">
-								{#if activeArticles.length === 0}
-									<p class="text-xs text-[#78716C] italic p-2">Nessun articolo presente nel batch.</p>
+								{#if isUpdatesTask}
+									{#if activeUpdates.length === 0}
+										<p class="text-xs text-[#78716C] italic p-2">Nessun aggiornamento presente nel batch.</p>
+									{:else}
+										{#each activeUpdates as update, idx (idx)}
+											<div class="p-2.5 bg-white rounded-xl border border-[#E7DFD5] space-y-1 text-xs font-serif">
+												<div class="flex items-center justify-between text-[11px] font-mono font-bold text-[#7A2222]">
+													<span>Progr. {update.progr || idx + 1}</span>
+													<span>{update.data_pubblicazione || ''}</span>
+												</div>
+												{#if update.atto_modificante}
+													<div class="text-[11px] font-semibold text-stone-800">{update.atto_modificante}</div>
+												{/if}
+												<div class="text-[#57534E] leading-relaxed whitespace-pre-wrap">{update.testo_disposizione}</div>
+											</div>
+										{/each}
+									{/if}
 								{:else}
-									{#each activeArticles as article, idx (`${article.numero}_${idx}`)}
-										<ArticleText {article} />
-									{/each}
+									{#if activeArticles.length === 0}
+										<p class="text-xs text-[#78716C] italic p-2">Nessun articolo presente nel batch.</p>
+									{:else}
+										{#each activeArticles as article, idx (`${article.numero}_${idx}`)}
+											<ArticleText {article} />
+										{/each}
+									{/if}
 								{/if}
 							</div>
 						</div>

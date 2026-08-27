@@ -6,14 +6,13 @@
  *  contesto "proprietario" del progresso.
  */
 import type { Workset } from '@/domain/workset';
-import { listWorksets } from '@/services/storage/worksetStore';
+import { listWorksets, deleteWorkset } from '@/services/storage/worksetStore';
 
 const POLL_INTERVAL_MS = 1500;
 
 /** "In corso" = qualcosa richiede ancora attenzione dell'utente.
- *  'ready' resta incluso: gli articoli sono scaricati ma i batch non sono
- *  stati ancora generati/lavorati, quindi il job non è affatto concluso. */
-const ACTIVE_STATUSES: Workset['status'][] = ['downloading', 'ready', 'in_progress'];
+ *  Include 'empty' e 'downloading' per le attività da scaricare o resettate. */
+const ACTIVE_STATUSES: Workset['status'][] = ['empty', 'downloading', 'ready', 'in_progress'];
 
 class ActivityStore {
   active = $state<Workset[]>([]);
@@ -24,7 +23,16 @@ class ActivityStore {
     this.loading = true;
     try {
       const all = await listWorksets();
-      this.active = all
+      
+      // Rimuove i vecchi workset obsoleti hardcoded locali (task-cc-*)
+      for (const w of all) {
+        if (w.jobId.startsWith('task-cc-')) {
+          await deleteWorkset(w.jobId);
+        }
+      }
+
+      const updated = await listWorksets();
+      this.active = updated
         .filter((w) => ACTIVE_STATUSES.includes(w.status))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     } finally {

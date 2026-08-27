@@ -30,8 +30,14 @@ export interface DownloadProgressEvent {
   error: string | null;
 }
 
+export interface SelectBatchEvent {
+  type: 'SELECT_BATCH';
+  jobId: string;
+  batchId: string;
+}
+
 /** Broadcast dal background verso ogni UI aperta. */
-export type ExtensionEvent = DownloadProgressEvent;
+export type ExtensionEvent = DownloadProgressEvent | SelectBatchEvent;
 
 export interface MessageResponses {
   GET_PENDING_AI_REQUEST: PendingAiRequest | null;

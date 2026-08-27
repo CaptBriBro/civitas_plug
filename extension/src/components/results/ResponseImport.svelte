@@ -1,13 +1,9 @@
 <script lang="ts">
 	import {
-		ClipboardPaste,
-		CheckCircle2,
-		ShieldAlert,
 		Sparkles,
 		Layers,
 		HelpCircle,
-		BarChart3,
-		Columns
+		BarChart3
 	} from 'lucide-svelte';
 	import Button from '@/components/ui/Button.svelte';
 	import Alert from '@/components/ui/Alert.svelte';
@@ -17,7 +13,8 @@
 	import { openDashboard } from '@/services/browser/browserService';
 	import { parseAiResponse, MIN_RESPONSE_LENGTH } from '@/features/results/responseParser';
 	import type { WorksetBatch, ExtractedRelation } from '@/domain/workset';
-	import type { ProviderId } from '@/domain/prompt';
+	import ImportProviderTabs from './ImportProviderTabs.svelte';
+	import ImportPreviewPanel from './ImportPreviewPanel.svelte';
 
 	interface Props {
 		batch: WorksetBatch;
@@ -31,7 +28,6 @@
 	let draftGemini = $state('');
 
 	let warning = $state<string | undefined>(undefined);
-	let saving = $state(false);
 	let loadedBatchId = $state<string | null>(null);
 
 	$effect(() => {
@@ -179,59 +175,14 @@
 		</p>
 	</div>
 
-	<!-- TAB NAVIGATION: CHATGPT / GEMINI / MOSTRA ENTRAMBI IN SEQUENZA / CONFRONTO -->
-	<div class="flex items-center gap-2 border-b border-[#E7DFD5] pb-2 overflow-x-auto">
-		<button
-			type="button"
-			onclick={() => (activeProviderTab = 'chatgpt')}
-			class="px-3.5 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0
-				{activeProviderTab === 'chatgpt' ? 'bg-purple-900 text-white border-purple-900 shadow-2xs' : 'bg-white text-stone-700 border-[#E7DFD5] hover:bg-[#FAF6F0]'}"
-		>
-			<Sparkles class="w-3.5 h-3.5 text-purple-300" /> ChatGPT (OpenAI)
-			{#if reportChatGPT}
-				<span class="px-1.5 py-0.2 rounded-full bg-emerald-500 text-white text-[10px] font-mono font-bold">
-					{reportChatGPT.relations.length}
-				</span>
-			{/if}
-		</button>
-
-		<button
-			type="button"
-			onclick={() => (activeProviderTab = 'gemini')}
-			class="px-3.5 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0
-				{activeProviderTab === 'gemini' ? 'bg-blue-900 text-white border-blue-900 shadow-2xs' : 'bg-white text-stone-700 border-[#E7DFD5] hover:bg-[#FAF6F0]'}"
-		>
-			<Sparkles class="w-3.5 h-3.5 text-blue-300" /> Gemini (Google)
-			{#if reportGemini}
-				<span class="px-1.5 py-0.2 rounded-full bg-emerald-500 text-white text-[10px] font-mono font-bold">
-					{reportGemini.relations.length}
-				</span>
-			{/if}
-		</button>
-
-		<button
-			type="button"
-			onclick={() => (activeProviderTab = 'both')}
-			class="px-3.5 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0
-				{activeProviderTab === 'both' ? 'bg-indigo-900 text-white border-indigo-900 shadow-2xs' : 'bg-white text-stone-700 border-[#E7DFD5] hover:bg-[#FAF6F0]'}"
-		>
-			<Columns class="w-3.5 h-3.5 text-indigo-300" /> Mostra Entrambi (Uno dopo l'altro)
-		</button>
-
-		<button
-			type="button"
-			onclick={() => (activeProviderTab = 'compare')}
-			class="px-3.5 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0
-				{activeProviderTab === 'compare' ? 'bg-amber-900 text-white border-amber-900 shadow-2xs' : 'bg-white text-stone-700 border-[#E7DFD5] hover:bg-[#FAF6F0]'}"
-		>
-			<Layers class="w-3.5 h-3.5 text-amber-300" /> Confronto & Consenso
-			{#if consensusAnalysis}
-				<span class="px-1.5 py-0.2 rounded-full bg-purple-500 text-white text-[10px] font-mono font-bold">
-					✓
-				</span>
-			{/if}
-		</button>
-	</div>
+	<!-- TAB NAVIGATION -->
+	<ImportProviderTabs
+		{activeProviderTab}
+		{reportChatGPT}
+		{reportGemini}
+		{consensusAnalysis}
+		onSelectTab={(tab) => (activeProviderTab = tab)}
+	/>
 
 	<!-- PANNELLO CHATGPT (SINGOLO) -->
 	{#if activeProviderTab === 'chatgpt'}
@@ -254,35 +205,14 @@
 			/>
 
 			{#if reportChatGPT && diffChatGPT}
-				<div class="p-4 rounded-xl border bg-[#FAF6F0] space-y-3 shadow-2xs border-purple-200 animate-in fade-in">
-					<div class="flex items-center justify-between border-b border-[#E7DFD5] pb-2">
-						<span class="text-xs font-bold text-purple-950 flex items-center gap-1.5">
-							<CheckCircle2 class="w-4 h-4 text-purple-700" /> Brief KPI Summary ChatGPT
-						</span>
-						<Badge variant="purple">🤖 ChatGPT</Badge>
-					</div>
-
-					<div class="grid grid-cols-3 gap-2 text-center text-xs font-bold">
-						<div class="p-2 bg-emerald-50 text-emerald-900 rounded border border-emerald-200">
-							<span class="block text-sm font-extrabold">{diffChatGPT.added.length}</span>
-							<span class="text-[9px]">Nuove Relazioni</span>
-						</div>
-						<div class="p-2 bg-purple-50 text-purple-900 rounded border border-purple-200">
-							<span class="block text-sm font-extrabold">{diffChatGPT.confirmed.length}</span>
-							<span class="text-[9px]">Confermate</span>
-						</div>
-						<div class="p-2 bg-amber-50 text-amber-900 rounded border border-amber-200">
-							<span class="block text-sm font-extrabold">{diffChatGPT.removedCandidates.length}</span>
-							<span class="text-[9px]">Sparite / Escluse</span>
-						</div>
-					</div>
-
-					<div class="pt-2 flex flex-col sm:flex-row gap-2">
-						<Button variant="ai" full size="sm" onclick={openFullDashboardCompare}>
-							<BarChart3 class="w-4 h-4" /> 📊 Apri Finestra Analisi & Approva Risultati
-						</Button>
-					</div>
-				</div>
+				<ImportPreviewPanel
+					providerName="ChatGPT"
+					providerBadge="purple"
+					addedCount={diffChatGPT.added.length}
+					confirmedCount={diffChatGPT.confirmed.length}
+					removedCount={diffChatGPT.removedCandidates.length}
+					onOpenCompare={openFullDashboardCompare}
+				/>
 			{/if}
 		</div>
 	{/if}
@@ -308,35 +238,14 @@
 			/>
 
 			{#if reportGemini && diffGemini}
-				<div class="p-4 rounded-xl border bg-[#FAF6F0] space-y-3 shadow-2xs border-blue-200 animate-in fade-in">
-					<div class="flex items-center justify-between border-b border-[#E7DFD5] pb-2">
-						<span class="text-xs font-bold text-blue-950 flex items-center gap-1.5">
-							<CheckCircle2 class="w-4 h-4 text-blue-700" /> Brief KPI Summary Gemini
-						</span>
-						<Badge variant="indigo">🤖 Gemini</Badge>
-					</div>
-
-					<div class="grid grid-cols-3 gap-2 text-center text-xs font-bold">
-						<div class="p-2 bg-emerald-50 text-emerald-900 rounded border border-emerald-200">
-							<span class="block text-sm font-extrabold">{diffGemini.added.length}</span>
-							<span class="text-[9px]">Nuove Relazioni</span>
-						</div>
-						<div class="p-2 bg-blue-50 text-blue-900 rounded border border-blue-200">
-							<span class="block text-sm font-extrabold">{diffGemini.confirmed.length}</span>
-							<span class="text-[9px]">Confermate</span>
-						</div>
-						<div class="p-2 bg-amber-50 text-amber-900 rounded border border-amber-200">
-							<span class="block text-sm font-extrabold">{diffGemini.removedCandidates.length}</span>
-							<span class="text-[9px]">Sparite / Escluse</span>
-						</div>
-					</div>
-
-					<div class="pt-2 flex flex-col sm:flex-row gap-2">
-						<Button variant="ai" full size="sm" onclick={openFullDashboardCompare}>
-							<BarChart3 class="w-4 h-4" /> 📊 Apri Finestra Analisi & Approva Risultati
-						</Button>
-					</div>
-				</div>
+				<ImportPreviewPanel
+					providerName="Gemini"
+					providerBadge="indigo"
+					addedCount={diffGemini.added.length}
+					confirmedCount={diffGemini.confirmed.length}
+					removedCount={diffGemini.removedCandidates.length}
+					onOpenCompare={openFullDashboardCompare}
+				/>
 			{/if}
 		</div>
 	{/if}

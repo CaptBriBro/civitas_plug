@@ -35,3 +35,26 @@ export async function updateBatch(
 
   return saveWorkset({ ...workset, batches });
 }
+
+import { storage } from 'wxt/storage';
+
+export interface ActiveBatchSelection {
+  jobId: string;
+  batchId: string;
+}
+
+const activeBatchItem = storage.defineItem<ActiveBatchSelection | null>('local:civitas_active_batch', {
+  fallback: null,
+});
+
+export function getActiveBatchSelection(): Promise<ActiveBatchSelection | null> {
+  return activeBatchItem.getValue();
+}
+
+export function saveActiveBatchSelection(selection: ActiveBatchSelection | null): Promise<void> {
+  return activeBatchItem.setValue(selection);
+}
+
+export function watchActiveBatchSelection(callback: (selection: ActiveBatchSelection | null) => void): () => void {
+  return activeBatchItem.watch(callback);
+}

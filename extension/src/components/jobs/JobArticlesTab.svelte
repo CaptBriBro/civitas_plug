@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Search, ChevronLeft, ChevronRight, BookOpen } from 'lucide-svelte';
-	import type { LegalArticle } from '@/domain/article';
+	import type { LegalArticle, ArticleVersion } from '@/domain/article';
 
 	interface Props {
 		articles: LegalArticle[];
@@ -31,6 +31,29 @@
 	let paginatedArticles = $derived(
 		filteredArticles.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 	);
+
+	let selectedVersionIndices = $state<Record<string, number>>({});
+
+	function getSelectedVersion(art: LegalArticle): ArticleVersion {
+		const key = `${art.numero}_${art.ordering}`;
+		const index = selectedVersionIndices[key];
+		if (index !== undefined && art.versions[index]) {
+			return art.versions[index]!;
+		}
+		const currentIdx = art.versions.findIndex((v) => v.isCurrent);
+		const found = currentIdx !== -1 ? art.versions[currentIdx] : art.versions[art.versions.length - 1];
+		return found || art.versions[0]!;
+	}
+
+	function selectVersion(art: LegalArticle, idx: number) {
+		const key = `${art.numero}_${art.ordering}`;
+		selectedVersionIndices[key] = idx;
+	}
+
+	function isAbrogated(text: string): boolean {
+		const t = text.toLowerCase();
+		return t.includes('articolo abrogato') || t.includes('disposizione abrogata') || t.trim().startsWith('[articolo abrogato]') || t.trim().startsWith('((articolo abrogato))');
+	}
 
 	function formatText(text: string): string[] {
 		return text.split('\n').filter((l) => l.trim().length > 0);
@@ -94,13 +117,39 @@
 
 		<div class="space-y-3">
 			{#each paginatedArticles as art, index (`art_${art.numero}_${art.ordering || index}_${index}`)}
+				{@const activeVer = getSelectedVersion(art)}
 				<div class="p-4 rounded-xl bg-[#FAF6F0] border border-[#E7DFD5] hover:border-[#7A2222]/40 transition-all space-y-2.5">
 					<div class="flex items-center justify-between flex-wrap gap-2">
 						<div class="flex items-center gap-2 flex-wrap">
 							<span class="font-mono text-xs font-bold text-[#7A2222]">Art. {art.numero}</span>
-							<span class="px-1.5 py-0.5 text-[10px] font-bold bg-emerald-200 text-emerald-900 rounded-md uppercase tracking-wide">
-								Vigente
-							</span>
+							
+							{#if isAbrogated(activeVer.testo)}
+								<span class="px-1.5 py-0.5 text-[10px] font-bold bg-rose-200 text-rose-900 rounded-md uppercase tracking-wide">
+									Abrogato
+								</span>
+							{:else if activeVer.isCurrent}
+								<span class="px-1.5 py-0.5 text-[10px] font-bold bg-emerald-200 text-emerald-900 rounded-md uppercase tracking-wide">
+									Vigente
+								</span>
+							{:else}
+								<span class="px-1.5 py-0.5 text-[10px] font-bold bg-indigo-100 text-indigo-900 rounded-md uppercase tracking-wide border border-indigo-200">
+									Storico ({activeVer.versionLabel})
+								</span>
+							{/if}
+
+							{#if art.versions && art.versions.length > 1}
+								<select
+									class="px-2 py-0.5 text-[10px] font-semibold bg-white border border-[#E7DFD5] rounded-md text-stone-700 focus:outline-none focus:border-[#7A2222] cursor-pointer"
+									value={art.versions.indexOf(activeVer)}
+									onchange={(e) => selectVersion(art, Number((e.target as HTMLSelectElement).value))}
+								>
+									{#each art.versions as ver, idx}
+										<option value={idx}>
+											Visualizza: {ver.isCurrent ? 'Vigente' : 'Storico'} ({ver.versionLabel})
+										</option>
+									{/each}
+								</select>
+							{/if}
 
 							{#if art.candidateScore >= 0.85}
 								<span class="px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-950 border border-amber-300 rounded-md flex items-center gap-1">
@@ -111,20 +160,20 @@
 									⚡ RINVII CANDIDATI ({Math.round(art.candidateScore * 100)}%)
 								</span>
 							{/if}
-
-							{#if art.versions && art.versions.filter((v) => !v.isCurrent).length > 0}
-								<span class="px-1.5 py-0.5 text-[10px] font-semibold bg-indigo-100 text-indigo-800 rounded-md">
-									{art.versions.filter((v) => !v.isCurrent).length} versioni storiche
-								</span>
-							{/if}
 						</div>
-						{#if art.rubrica}
-							<span class="text-[11px] font-serif font-semibold text-[#1C1917]">{art.rubrica}</span>
+						{#if activeVer.rubrica || art.rubrica}
+							<span class="text-[11px] font-serif font-semibold text-[#1C1917]">{activeVer.rubrica || art.rubrica}</span>
 						{/if}
 					</div>
 
+					{#if activeVer.vigenzaStart || activeVer.vigenzaEnd}
+						<div class="text-[10px] text-stone-500 font-mono">
+							📅 Vigenza: {activeVer.vigenzaStart || 'inizio'} → {activeVer.vigenzaEnd || 'oggi'}
+						</div>
+					{/if}
+
 					<div class="text-xs text-[#57534E] leading-relaxed font-serif space-y-1.5 whitespace-pre-wrap">
-						{#each formatText(art.testo) as pLine, pIdx (`${art.numero}_p_${pIdx}`)}
+						{#each formatText(activeVer.testo) as pLine, pIdx (`${art.numero}_p_${pIdx}`)}
 							<p class="leading-relaxed">{pLine}</p>
 						{/each}
 					</div>
@@ -149,29 +198,6 @@
 								{/each}
 							</div>
 						</div>
-					{/if}
-
-					{#if art.versions && art.versions.filter((v) => !v.isCurrent).length > 0}
-						<details class="mt-2">
-							<summary class="text-[11px] text-indigo-700 font-semibold cursor-pointer hover:underline">
-								📜 Mostra {art.versions.filter((v) => !v.isCurrent).length} versioni storiche
-							</summary>
-							<div class="mt-2 space-y-3 pl-3 border-l-2 border-indigo-200">
-								{#each art.versions.filter((v) => !v.isCurrent) as ver, vIdx (`${art.numero}_v_${ver.versionLabel || vIdx}_${vIdx}`)}
-									<div class="bg-white/60 rounded-lg p-3 border border-[#E7DFD5]/60">
-										<div class="flex items-center justify-between mb-1.5">
-											<span class="font-semibold text-[11px] text-emerald-700">
-												{ver.versionLabel}
-											</span>
-											<span class="text-[10px] text-[#78716C]">
-												{ver.vigenzaStart || ''}{ver.vigenzaEnd ? ` → ${ver.vigenzaEnd}` : ' → oggi'}
-											</span>
-										</div>
-										<p class="text-xs text-[#57534E] font-serif whitespace-pre-wrap">{ver.testo}</p>
-									</div>
-								{/each}
-							</div>
-						</details>
 					{/if}
 				</div>
 			{/each}

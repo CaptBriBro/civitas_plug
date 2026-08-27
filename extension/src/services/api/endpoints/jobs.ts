@@ -10,6 +10,15 @@ export interface JobQuery {
   offset?: number;
 }
 
+export interface ProposeJobPayload {
+  title: string;
+  urn?: string | null;
+  taskType?: string;
+  description?: string;
+  targetArticles?: string[];
+  reason?: string;
+}
+
 /** Catalogo pubblico: non richiede il collegamento dell'account. */
 export function fetchJobs(query: JobQuery = {}): Promise<JobListResponse> {
   const params = new URLSearchParams();
@@ -26,4 +35,9 @@ export function fetchJobs(query: JobQuery = {}): Promise<JobListResponse> {
 
 export function fetchJob(jobId: string): Promise<JobDetail> {
   return api.get<JobDetail>(`/plugin/jobs/${encodeURIComponent(jobId)}`);
+}
+
+/** Propone una nuova legge o task esterna al backend per verifica e registrazione nel DB per tutti gli utenti. */
+export function proposeJob(payload: ProposeJobPayload): Promise<JobDetail> {
+  return api.post<JobDetail>('/plugin/jobs/propose', payload);
 }

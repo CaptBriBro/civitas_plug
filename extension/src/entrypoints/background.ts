@@ -13,11 +13,12 @@ import type { ExtensionMessage } from '@/messaging/types';
 import { broadcast } from '@/messaging/messages';
 import { refreshEnv } from '@/config/env';
 import { fetchJob } from '@/services/api/endpoints/jobs';
-import { downloadJobArticles } from '@/features/articles/fetchService';
+import { downloadJobArticles, inferUrn } from '@/features/articles/fetchService';
 import { getPending, markPending } from '@/services/storage/pendingStore';
 import { getSettings } from '@/services/storage/settingsStore';
-import { updateBatch } from '@/services/storage/worksetStore';
+import { loadWorkset, updateBatch } from '@/services/storage/worksetStore';
 import { messageFor } from '@/services/api/errors';
+import type { JobDetail } from '@/domain/job';
 
 export default defineBackground(() => {
   /** Un download per job: ripremere "Scarica" non ne avvia due in parallelo. */
@@ -28,7 +29,43 @@ export default defineBackground(() => {
     activeDownloads.set(jobId, controller);
 
     try {
-      const job = await fetchJob(jobId);
+      let job: JobDetail;
+      try {
+        job = await fetchJob(jobId);
+      } catch (fetchErr) {
+        const localWorkset = await loadWorkset(jobId);
+        if (!localWorkset) throw fetchErr;
+
+        job = {
+          id: localWorkset.jobId,
+          title: localWorkset.jobTitle,
+          description: 'Attività disponibile in locale.',
+          task_type: 'normative_relation_extraction',
+          status: localWorkset.status,
+          priority: 100,
+          downloadable: true,
+          act_title: localWorkset.jobTitle,
+          act_urn: inferUrn(localWorkset.jobTitle, localWorkset.actUrn),
+          article_start: 1,
+          article_end: localWorkset.articles.length || 100,
+          article_count: localWorkset.articles.length || 100,
+          updated_at: localWorkset.updatedAt,
+          parent_act_pub_id: null,
+          prompt_task: 'normative_relation_extraction',
+          created_at: localWorkset.createdAt,
+          source: {
+            provider: 'normattiva',
+            urn: inferUrn(localWorkset.jobTitle, localWorkset.actUrn),
+            codice_redazionale: null,
+            data_pubblicazione_gazzetta: null,
+            act_title: localWorkset.jobTitle,
+            tipo_atto: null,
+            article_start: 1,
+            article_end: localWorkset.articles.length || 100,
+          },
+        };
+      }
+
       const settings = await getSettings();
 
       const workset = await downloadJobArticles(job, {
@@ -57,8 +94,6 @@ export default defineBackground(() => {
         error: workset.progress.error,
       });
     } catch (err) {
-      // fetchService persiste già l'errore nel workset prima di rilanciare:
-      // il broadcast serve solo a far ricaricare la UI subito, senza attesa.
       broadcast({
         type: 'DOWNLOAD_PROGRESS',
         jobId,
@@ -86,7 +121,6 @@ export default defineBackground(() => {
       case 'AI_PROMPT_FAILED': {
         await markPending(message.provider, 'failed', message.reason);
         const pending = await getPending(message.provider);
-        // Il prompt resta valido: l'utente potrà copiarlo a mano.
         if (pending) {
           await updateBatch(pending.jobId, pending.batchId, {
             status: 'prompt_ready',
@@ -119,7 +153,6 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener((rawMessage: unknown) => {
     const message = rawMessage as ExtensionMessage;
-    // I broadcast di avanzamento non sono richieste: non vanno gestiti qui.
     if (!message?.type || message.type.startsWith('DOWNLOAD_')) return undefined;
     return handle(message);
   });

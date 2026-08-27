@@ -12,6 +12,10 @@
 
 	let { jobId, onstart }: Props = $props();
 
+	let isUpdatesTask = $derived(
+		(worksetStore.workset?.actUpdates?.length || 0) > 0 ||
+		worksetStore.workset?.jobTitle?.includes('Aggiornamenti')
+	);
 	let progress = $derived(worksetStore.workset?.progress);
 </script>
 
@@ -21,10 +25,12 @@
 			<h3 class="font-display text-sm font-semibold text-[#1C1917]">Acquisizione da Normattiva</h3>
 			<p class="text-[11px] text-[#78716C]">
 				{#if progress && progress.total > 0}
-					{progress.fetched} di {progress.total} articoli
-					{#if progress.lastArticle}· ultimo: art. {progress.lastArticle}{/if}
+					{progress.fetched} di {progress.total} {isUpdatesTask ? 'voci di modifica' : 'articoli'}
+					{#if progress.lastArticle}· {progress.lastArticle}{/if}
 				{:else}
-					Gli articoli vengono scaricati dal tuo browser, con il tuo indirizzo IP.
+					{isUpdatesTask
+						? "Avvia l'acquisizione per scaricare la cronistoria delle modifiche e novelle dell'atto."
+						: "Avvia l'acquisizione per scaricare gli articoli e prepararli all'analisi."}
 				{/if}
 			</p>
 		</div>
@@ -36,7 +42,11 @@
 		{:else}
 			<Button size="sm" onclick={onstart}>
 				<Download class="w-3.5 h-3.5" />
-				{progress && progress.fetched > 0 ? 'Riprendi acquisizione' : 'Scarica articoli'}
+				{#if progress && progress.fetched > 0}
+					{isUpdatesTask ? 'Riprendi acquisizione modifiche' : 'Riprendi acquisizione'}
+				{:else}
+					{isUpdatesTask ? 'Scarica aggiornamenti atto' : 'Scarica articoli'}
+				{/if}
 			</Button>
 		{/if}
 	</div>

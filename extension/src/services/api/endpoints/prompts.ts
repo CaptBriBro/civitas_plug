@@ -34,3 +34,26 @@ export function resolvePrompt(params: ResolvePromptParams): Promise<PromptResolv
     browser: getBrowserId(),
   });
 }
+
+export interface SystemPrompt {
+  key: string;
+  name: string;
+  version: string;
+  mode: string;
+  description: string;
+  template: string;
+  hash: string;
+  file?: string;
+}
+
+export interface ListSystemPromptsResponse {
+  prompts: SystemPrompt[];
+  total: number;
+}
+
+/**
+ * Carica l'elenco dei prompt di sistema ufficiali registrati sul server Civitas.
+ */
+export function fetchSystemPrompts(): Promise<ListSystemPromptsResponse> {
+  return api.get<ListSystemPromptsResponse>('/prompts');
+}

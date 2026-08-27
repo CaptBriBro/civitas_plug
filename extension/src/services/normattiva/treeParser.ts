@@ -200,11 +200,23 @@ function findAnchors(html: string, classToken: string): Array<{ start: number; e
 /** Se esistono versioni storiche, la vigente è l'ultima e non più l'originale. */
 function finalizeVersions(articles: ArticleRef[]): void {
   for (const article of articles) {
-    const historical: VersionRef[] = article.versions.filter((v) => !v.isCurrent);
+    const mainVersion = article.versions.find((v) => v.isCurrent);
+    const historical = article.versions.filter((v) => !v.isCurrent);
     if (historical.length === 0) continue;
 
     historical.sort((a, b) => a.versionOrder - b.versionOrder);
-    historical[historical.length - 1]!.isCurrent = true;
-    article.versions = historical;
+    
+    if (mainVersion) {
+      mainVersion.versionLabel = 'vigente';
+      mainVersion.versionOrder = 9999;
+      mainVersion.isCurrent = true;
+      for (const h of historical) {
+        h.isCurrent = false;
+      }
+      article.versions = [...historical, mainVersion];
+    } else {
+      historical[historical.length - 1]!.isCurrent = true;
+      article.versions = historical;
+    }
   }
 }

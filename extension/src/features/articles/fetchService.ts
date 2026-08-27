@@ -7,11 +7,12 @@
 import { NormattivaClient } from '@/services/normattiva/client';
 import { parseTree } from '@/services/normattiva/treeParser';
 import { parseArticleHtml } from '@/services/normattiva/articleParser';
+import { parseActUpdatesHtml } from '@/services/normattiva/actUpdatesParser';
 import { isInRange, toLegalArticle } from '@/services/normattiva/mapper';
 import type { ArticleRef } from '@/services/normattiva/types';
 import type { JobDetail } from '@/domain/job';
 import type { LegalArticle } from '@/domain/article';
-import type { Workset } from '@/domain/workset';
+import type { Workset, ActUpdateEntry } from '@/domain/workset';
 import { loadWorkset, saveWorkset } from '@/services/storage/worksetStore';
 import { NormattivaError } from '@/services/api/errors';
 
@@ -27,12 +28,27 @@ export interface FetchOptions {
   signal?: AbortSignal;
 }
 
+export function inferUrn(title: string, urn?: string | null): string | null {
+  if (urn && urn.trim()) return urn.trim();
+  const lower = (title || '').toLowerCase();
+  if (lower.includes('preleggi') || lower.includes('disposizioni sulla legge in generale')) {
+    return 'urn:nir:stato:regio.decreto:1942-03-16;262';
+  }
+  if (lower.includes('codice civile')) {
+    return 'urn:nir:stato:regio.decreto:1942-03-16;262';
+  }
+  if (lower.includes('costituzione')) {
+    return 'urn:nir:stato:costituzione:1947-12-27';
+  }
+  return null;
+}
+
 function emptyWorkset(job: JobDetail): Workset {
   const now = new Date().toISOString();
   return {
     jobId: job.id,
     jobTitle: job.title,
-    actUrn: job.source.urn,
+    actUrn: inferUrn(job.title, job.source?.urn),
     status: 'downloading',
     articles: [],
     batches: [],
@@ -65,12 +81,6 @@ export async function downloadJobArticles(
   job: JobDetail,
   options: FetchOptions = {},
 ): Promise<Workset> {
-  // Caricato/creato PRIMA di ogni possibile fallimento: se qualcosa va storto
-  // più sotto (warm-up, albero vuoto, range senza articoli) l'errore deve
-  // poter essere scritto su un workset che esiste già. Un errore mai
-  // persistito verrebbe perso al primo `worksetStore.load()` successivo,
-  // che ricarica lo stato dallo storage e mostrerebbe "nessun articolo"
-  // senza spiegazione.
   let workset = (await loadWorkset(job.id)) ?? emptyWorkset(job);
 
   async function failWith(message: string): Promise<never> {
@@ -82,47 +92,101 @@ export async function downloadJobArticles(
     throw new NormattivaError(message);
   }
 
-  const urn = job.source.urn;
+  const urn = inferUrn(job.title, workset.actUrn || job.source?.urn);
   if (!urn) {
     await failWith(
-      `L'attività "${job.title}" non ha un URN Normattiva: non è scaricabile dall'estensione.`,
+      `L'attività "${job.title}" non ha un URN Normattiva valido: non è scaricabile dall'estensione.`,
     );
     return workset;
   }
 
-  const alreadyFetched = new Set(workset.articles.map((a) => a.numero));
+  workset.actUrn = urn;
   const client = new NormattivaClient();
+
+  // Se il task è di tipo ACT_UPDATES, scarica la cronistoria delle modifiche
+  if (job.task_type === 'ACT_UPDATES') {
+    try {
+      const updatesHtml = await client.getActUpdatesHtml(
+        urn,
+        job.source?.codice_redazionale ?? undefined,
+        job.source?.data_pubblicazione_gazzetta ?? undefined,
+      );
+      const updates = parseActUpdatesHtml(updatesHtml);
+      
+      workset = await saveWorkset({
+        ...workset,
+        actUpdates: updates,
+        status: 'ready',
+        progress: {
+          fetched: updates.length,
+          total: updates.length,
+          lastArticle: updates.length > 0 ? `Aggiornamenti: ${updates.length}` : null,
+          resumeFrom: null,
+          error: null,
+        },
+      });
+
+      options.onProgress?.({
+        fetched: updates.length,
+        total: updates.length,
+        lastArticle: `${updates.length} voci`,
+      });
+
+      return workset;
+    } catch (err) {
+      await failWith(err instanceof Error ? err.message : String(err));
+      return workset;
+    }
+  }
+
+  const alreadyFetched = new Set(workset.articles.map((a) => a.numero));
 
   let tree: ReturnType<typeof parseTree>;
   try {
     const html = await client.getTree(
       urn,
-      job.source.codice_redazionale ?? undefined,
-      job.source.data_pubblicazione_gazzetta ?? undefined,
+      job.source?.codice_redazionale ?? undefined,
+      job.source?.data_pubblicazione_gazzetta ?? undefined,
     );
     tree = parseTree(html);
   } catch (err) {
     await failWith(err instanceof Error ? err.message : String(err));
-    return workset; // irraggiungibile: failWith rilancia sempre
+    return workset;
   }
 
   if (tree.articles.length === 0) {
-    // Un albero vuoto non è mai legittimo per un atto reale: quasi sempre
-    // significa che Normattiva ha risposto con una pagina generica (sessione
-    // non valida, blocco temporaneo) invece dell'atto richiesto.
     await failWith(
       "Normattiva non ha restituito alcun articolo per questo atto: probabile problema di sessione. Riprova tra qualche secondo.",
     );
     return workset;
   }
 
-  const wanted = tree.articles.filter((ref) =>
-    isInRange(ref.numero, job.source.article_start, job.source.article_end),
+  let wanted = tree.articles.filter((ref) =>
+    isInRange(ref.numero, job.source?.article_start, job.source?.article_end),
   );
+
+  // Apply dynamic structural filtering if provided by the task metadata
+  if (job.source?.exclude_unit_path_pattern) {
+    const rx = new RegExp(job.source.exclude_unit_path_pattern, 'i');
+    wanted = wanted.filter((ref) => !ref.unitPath.some((p) => rx.test(p)));
+  }
+
+  if (job.source?.include_unit_path_pattern) {
+    const rx = new RegExp(job.source.include_unit_path_pattern, 'i');
+    wanted = wanted.filter((ref) => ref.unitPath.some((p) => rx.test(p)));
+  }
+
+  if (job.source?.min_ordering !== undefined && job.source?.min_ordering !== null) {
+    wanted = wanted.filter((ref) => ref.ordering >= job.source.min_ordering!);
+  }
+
+  if (job.source?.max_ordering !== undefined && job.source?.max_ordering !== null) {
+    wanted = wanted.filter((ref) => ref.ordering <= job.source.max_ordering!);
+  }
 
   if (wanted.length === 0) {
     await failWith(
-      `Nessun articolo nell'intervallo ${job.source.article_start}-${job.source.article_end} trovato nell'atto scaricato.`,
+      `Nessun articolo nell'intervallo ${job.source?.article_start ?? 1}-${job.source?.article_end ?? 'fine'} trovato nell'atto scaricato.`,
     );
     return workset;
   }
@@ -136,15 +200,15 @@ export async function downloadJobArticles(
   const articles: LegalArticle[] = [...workset.articles];
 
   for (const ref of wanted) {
-    if (options.signal?.aborted) break;
+    if (options.signal?.aborted) return workset;
     if (alreadyFetched.has(ref.numero)) continue;
 
     try {
       const versions = await fetchArticleVersions(client, ref, urn);
+      if (options.signal?.aborted) return workset;
       articles.push(toLegalArticle({ jobId: job.id, urn, ref, versions, threshold: options.threshold }));
     } catch (err) {
-      // Un articolo irraggiungibile non deve far fallire l'intero job: si
-      // registra l'errore e si prosegue, l'utente potrà riprovare.
+      if (options.signal?.aborted) return workset;
       workset = await saveWorkset({
         ...workset,
         articles,
@@ -159,7 +223,7 @@ export async function downloadJobArticles(
       continue;
     }
 
-    // Checkpoint dopo ogni articolo.
+    if (options.signal?.aborted) return workset;
     workset = await saveWorkset({
       ...workset,
       articles,
@@ -174,6 +238,8 @@ export async function downloadJobArticles(
 
     options.onProgress?.({ fetched: articles.length, total: wanted.length, lastArticle: ref.numero });
   }
+
+  if (options.signal?.aborted) return workset;
 
   const complete = articles.length >= wanted.length;
 

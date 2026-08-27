@@ -18,7 +18,12 @@ export function broadcast(event: ExtensionEvent): void {
 export function onEvent(handler: (event: ExtensionEvent) => void): () => void {
   const listener = (message: unknown) => {
     const candidate = message as Partial<ExtensionEvent>;
-    if (candidate?.type === 'DOWNLOAD_PROGRESS') handler(candidate as ExtensionEvent);
+    if (
+      candidate?.type === 'DOWNLOAD_PROGRESS' ||
+      candidate?.type === 'SELECT_BATCH'
+    ) {
+      handler(candidate as ExtensionEvent);
+    }
   };
 
   browser.runtime.onMessage.addListener(listener);

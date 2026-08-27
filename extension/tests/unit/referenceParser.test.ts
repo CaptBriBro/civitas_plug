@@ -76,7 +76,7 @@ describe('analyzeArticle', () => {
     const analysis = analyzeArticle(text, { threshold: 0, ownNumero: '17' });
 
     expect(analysis.candidates.some((c) => c.parsed?.article === '18')).toBe(true);
-    expect(analysis.candidates.some((c) => c.parsed?.article === '17')).toBe(false);
+    expect(analysis.candidates.some((c) => c.type === 'article_reference' && c.parsed?.article === '17')).toBe(false);
   });
 });
 

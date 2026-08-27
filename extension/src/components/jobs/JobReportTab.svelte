@@ -9,27 +9,34 @@
 		FileText,
 		RefreshCw,
 		RotateCcw,
-		Trash2
+		Trash2,
+		Download
 	} from 'lucide-svelte';
 	import Button from '@/components/ui/Button.svelte';
 	import type { Workset } from '@/domain/workset';
 	import { worksetStore } from '@/stores/workset.svelte';
+	import ReportStatCards from './ReportStatCards.svelte';
 
 	interface Props {
 		workset: Workset | null;
 		downloading: boolean;
 		onselecttab?: (tab: string) => void;
+		onstartdownload?: () => void;
 		onstartai?: () => void;
 	}
 
-	let { workset, downloading, onselecttab, onstartai }: Props = $props();
+	let { workset, downloading, onselecttab, onstartdownload, onstartai }: Props = $props();
 
 	let showResetConfirm = $state(false);
 	let resetting = $state(false);
 
 	let articles = $derived(workset?.articles || []);
 	let totalArticlesCount = $derived(articles.length);
-	let isCompleted = $derived((workset?.articles.length || 0) > 0 && !downloading);
+	let isUpdatesTask = $derived((workset?.actUpdates?.length || 0) > 0 || (workset?.articles?.length === 0 && workset?.jobTitle?.includes("Aggiornamenti")));
+	let totalItemsCount = $derived(isUpdatesTask ? (workset?.actUpdates?.length || 0) : totalArticlesCount);
+	let isCompleted = $derived(
+		((workset?.articles.length || 0) > 0 || (workset?.actUpdates?.length || 0) > 0) && !downloading
+	);
 
 	// Collect candidates and relations
 	let allCandidates = $derived(
@@ -96,7 +103,6 @@
 			).length
 	);
 
-	// Version count across articles
 	let versionsCount = $derived(
 		articles.reduce((acc, a) => acc + ((a.versions || []).filter((v) => !v.isCurrent).length), 0)
 	);
@@ -118,6 +124,33 @@
 			}
 		}
 		return Array.from(map.values());
+	});
+
+	let detectedTargetArticlesCount = $derived.by(() => {
+		if (!isUpdatesTask || !workset?.actUpdates) return 0;
+		const set = new Set<string>();
+		for (const u of workset.actUpdates) {
+			for (const art of u.target_articles_detected || []) {
+				set.add(art);
+			}
+		}
+		return set.size;
+	});
+
+	let aiExtractedCount = $derived(allRelations.length);
+
+	let brokenLinksCount = $derived.by(() => {
+		const brokenFromRelations = allRelations.filter(
+			(r) => r.is_broken === true || r.link_status === 'BROKEN_LINK'
+		).length;
+		if (brokenFromRelations > 0) return brokenFromRelations;
+		return linkedLawsMap.length;
+	});
+
+	let resolvedLinksCount = $derived.by(() => {
+		return allRelations.filter(
+			(r) => r.is_broken === false || r.link_status === 'RESOLVED_LINK' || r.source_act_public_id
+		).length;
 	});
 
 	let isLlmVerified = $derived(
@@ -181,16 +214,25 @@
 					</button>
 				{/if}
 
-				<!-- PULSANTE PER RESETTARE COMPLETAMENTE IL TASK -->
-				<button
-					type="button"
-					onclick={() => (showResetConfirm = true)}
-					class="px-3.5 py-2.5 bg-rose-50 text-rose-950 border border-rose-300 hover:bg-rose-100 text-xs font-bold rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
-					title="Cancella gli articoli scaricati ed i batch per ripartire da zero"
-				>
-					<RotateCcw class="w-4 h-4 text-rose-700" />
-					<span>Resetta Completamente Task</span>
-				</button>
+				{#if totalArticlesCount > 0}
+					<button
+						type="button"
+						onclick={() => (showResetConfirm = true)}
+						class="px-3.5 py-2.5 bg-rose-50 text-rose-950 border border-rose-300 hover:bg-rose-100 text-xs font-bold rounded-xl flex items-center gap-1.5 cursor-pointer transition-all shadow-2xs"
+						title="Cancella gli articoli scaricati ed i batch per ripartire da zero"
+					>
+						<RotateCcw class="w-4 h-4 text-rose-700" />
+						<span>Resetta Completamente Task</span>
+					</button>
+				{:else if onstartdownload}
+					<Button variant="primary" size="sm" onclick={onstartdownload} disabled={downloading}>
+						{#if downloading}
+							<RefreshCw class="w-4 h-4 animate-spin" /> Acquisizione in corso…
+						{:else}
+							<Download class="w-4 h-4" /> {isUpdatesTask ? 'Scarica Aggiornamenti Atto' : 'Scarica Articoli'}
+						{/if}
+					</Button>
+				{/if}
 			</div>
 		</div>
 
@@ -202,7 +244,7 @@
 					<div>
 						<h4 class="font-display font-bold text-sm text-rose-950">Sei sicuro di voler resettare questo task?</h4>
 						<p class="text-xs text-rose-900 font-serif font-normal mt-1 leading-relaxed">
-							Questa operazione cancellerà tutti gli articoli scaricati finora, i candidati ed i batch di analisi AI. Potrai riscaricare il testo ed avviare l'analisi da zero.
+							Questa operazione cancellerà tutti i dati scaricati finora, i candidati ed i batch di analisi AI. Potrai riscaricare il testo ed avviare l'analisi da zero.
 						</p>
 					</div>
 				</div>
@@ -221,77 +263,17 @@
 			</div>
 		{/if}
 
-		{#if totalArticlesCount === 0 && !downloading}
-			<div class="mb-4 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-950 font-medium flex items-center gap-2 shadow-2xs">
-				<AlertTriangle class="w-4 h-4 text-amber-800 shrink-0" />
-				<span>Nessun articolo o dato estratto finora. Fai clic su <strong>«Scarica articoli»</strong> per acquisire gli articoli ed elaborare il report analitico.</span>
-			</div>
-		{/if}
-
-		<!-- Key Metrics Cards Grid (6 Columns) -->
-		<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-			<div class="bg-white p-3.5 rounded-xl border border-[#E7DFD5] shadow-2xs">
-				<div class="flex items-center gap-2 text-stone-500 mb-1">
-					<BookOpen class="w-4 h-4 text-[#7A2222]" />
-					<span class="text-[11px] font-bold">Articoli Estratti</span>
-				</div>
-				<div class="text-xl font-bold font-mono text-[#1C1917]">{totalArticlesCount}</div>
-				<div class="text-[10px] text-stone-500 mt-0.5">Disposizioni lette</div>
-			</div>
-
-			<div class="bg-white p-3.5 rounded-xl border border-[#E7DFD5] shadow-2xs">
-				<div class="flex items-center gap-2 text-stone-500 mb-1">
-					<Sparkles class="w-4 h-4 text-sky-700" />
-					<span class="text-[11px] font-bold">Riferimenti Rilevati</span>
-				</div>
-				<div class="text-xl font-bold font-mono text-[#1C1917]">{totalReferencesCount}</div>
-				<div class="text-[10px] text-stone-500 mt-0.5">Stima euristica iniziale</div>
-			</div>
-
-			<div class="bg-white p-3.5 rounded-xl border border-[#E7DFD5] shadow-2xs">
-				<div class="flex items-center gap-2 text-stone-500 mb-1">
-					<Link2 class="w-4 h-4 text-rose-700" />
-					<span class="text-[11px] font-bold">Abrogazioni Stimate</span>
-				</div>
-				<div class="text-xl font-bold font-mono text-rose-800">{abrogationCount}</div>
-				<div class="text-[10px] text-stone-500 mt-0.5">Clausole o note abrogative</div>
-			</div>
-
-			<button
-				type="button"
-				onclick={() => linkedLawsMap.length > 0 && onselecttab && onselecttab('linked_laws')}
-				class="bg-white p-3.5 rounded-xl border border-[#E7DFD5] shadow-2xs text-left w-full {linkedLawsMap.length > 0 ? 'cursor-pointer hover:border-amber-500 hover:bg-amber-50/40 transition-all' : ''}"
-			>
-				<div class="flex items-center gap-2 text-stone-500 mb-1">
-					<AlertTriangle class="w-4 h-4 text-amber-700" />
-					<span class="text-[11px] font-bold">Broken Links / Esterni</span>
-				</div>
-				<div class="text-xl font-bold font-mono text-amber-800">{linkedLawsMap.length}</div>
-				<div class="text-[10px] text-stone-500 mt-0.5">{linkedLawsMap.length > 0 ? 'Fai clic per aprire la tab →' : 'Riferimenti non in memoria'}</div>
-			</button>
-
-			<button
-				type="button"
-				onclick={() => onselecttab && onselecttab('normative_references')}
-				class="bg-white p-3.5 rounded-xl border border-[#E7DFD5] shadow-2xs text-left w-full cursor-pointer hover:border-emerald-500 hover:bg-emerald-50/40 transition-all"
-			>
-				<div class="flex items-center gap-2 text-stone-500 mb-1">
-					<CheckCircle2 class="w-4 h-4 text-emerald-700" />
-					<span class="text-[11px] font-bold">Broken Links Sanati</span>
-				</div>
-				<div class="text-xl font-bold font-mono text-emerald-800">0</div>
-				<div class="text-[10px] text-stone-500 mt-0.5">Riferimenti risolti</div>
-			</button>
-
-			<div class="bg-white p-3.5 rounded-xl border border-[#E7DFD5] shadow-2xs">
-				<div class="flex items-center gap-2 text-stone-500 mb-1">
-					<FileText class="w-4 h-4 text-purple-700" />
-					<span class="text-[11px] font-bold">Versioni Storiche</span>
-				</div>
-				<div class="text-xl font-bold font-mono text-purple-800">{versionsCount}</div>
-				<div class="text-[10px] text-stone-500 mt-0.5">Testi storici estratto</div>
-			</div>
-		</div>
+		<!-- Key Metrics Cards Grid -->
+		<ReportStatCards
+			{isUpdatesTask}
+			{totalItemsCount}
+			{totalReferencesCount}
+			{aiExtractedCount}
+			linkedLawsCount={linkedLawsMap.length}
+			{brokenLinksCount}
+			{resolvedLinksCount}
+			{isLlmVerified}
+		/>
 	</div>
 
 	<!-- Category Breakdown & Distribution Card -->

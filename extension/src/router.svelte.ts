@@ -6,7 +6,7 @@
  *  Rotte: #/  #/job/:jobId  #/job/:jobId/batch/:batchId  #/job/:jobId/batch/:batchId/compare  #/link  #/settings
  */
 
-export type RouteName = 'jobs' | 'job' | 'batch' | 'batch-compare' | 'link' | 'settings';
+export type RouteName = 'jobs' | 'job' | 'batch' | 'batch-compare' | 'settings' | 'prompts';
 
 export interface Route {
   name: RouteName;
@@ -28,8 +28,8 @@ function parse(hash: string): Route {
     return { name: 'job', jobId: decodeURIComponent(segments[1]) };
   }
 
-  if (segments[0] === 'link') return { name: 'link' };
   if (segments[0] === 'settings') return { name: 'settings' };
+  if (segments[0] === 'prompts') return { name: 'prompts' };
   return { name: 'jobs' };
 }
 
@@ -61,6 +61,10 @@ class Router {
 
   toBatchCompare(jobId: string, batchId: string): void {
     this.go(`#/job/${encodeURIComponent(jobId)}/batch/${batchId}/compare`);
+  }
+
+  toPrompts(): void {
+    this.go('#/prompts');
   }
 }
 

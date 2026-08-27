@@ -7,7 +7,7 @@
 import type { ProviderId } from '@/domain/prompt';
 import type { Workset, WorksetBatch } from '@/domain/workset';
 import { resolvePrompt } from '@/services/api/endpoints/prompts';
-import { articlesForBatch } from '@/features/results/batching';
+import { articlesForBatch, actUpdatesForBatch } from '@/features/results/batching';
 import { savePending } from '@/services/storage/pendingStore';
 import { updateBatch } from '@/services/storage/worksetStore';
 import { getInstallationId } from '@/services/storage/authStore';
@@ -31,6 +31,49 @@ function canReuse(batch: WorksetBatch, provider: ProviderId): boolean {
 
 /** Costruisce un prompt locale di fallback se il backend Civitas non è raggiungibile. */
 function buildLocalFallbackPrompt(workset: Workset, batch: WorksetBatch): string {
+	if (workset.actUpdates && workset.actUpdates.length > 0) {
+		const updates = actUpdatesForBatch(workset, batch);
+		const updatesText = updates
+			.map((u, idx) => {
+				let head = `[${idx + 1}] Aggiornamento Progr. ${u.progr || idx + 1}`;
+				if (u.data_pubblicazione) head += ` (Pubblicazione: ${u.data_pubblicazione})`;
+				if (u.atto_modificante) head += `\nAtto Modificante: ${u.atto_modificante}`;
+				return `${head}\nDisposizione Novellante: "${u.testo_disposizione}"`;
+			})
+			.join('\n\n');
+
+		return (
+			'Sei un assistente specializzato nell\'analisi formale e strutturata della cronistoria delle modifiche legislative italiane (Aggiornamenti all\'Atto Normattiva).\n\n' +
+			'Il tuo compito è analizzare ciascuna riga di aggiornamento/novella normativa fornita ed estrarre le relazioni giuridiche puntuali tra l\'ATTO MODIFICANTE (fonte della modifica) e le SINGOLE DISPOSIZIONI BERSAGLIO (articoli, commi abrogati, modificati, sostituiti o inseriti).\n\n' +
+			'REGOLE TASSATIVE DI ESTRAZIONE:\n' +
+			'1. Identifica l\'Atto Modificante con gli estremi normativi esatti (tipo, numero, anno, data).\n' +
+			'2. Per ciascuna disposizione dell\'atto bersaglio modificata o abrogata, genera una specifica relazione con target_article, target_paragraph, relation_type (ABROGATION, MODIFICATION, REPLACEMENT, INSERTION) ed evidence.\n\n' +
+			'OUTPUT SCHEMA (JSON OBBLIGATORIO):\n' +
+			'{\n' +
+			'  "relations": [\n' +
+			'    {\n' +
+			'      "object_kind": "EFFECT",\n' +
+			'      "family": "AMENDMENT",\n' +
+			'      "relation_type": "ABROGATION",\n' +
+			'      "target_article": "1",\n' +
+			'      "target_paragraph": "3",\n' +
+			'      "source_act": {\n' +
+			'        "type": "REGIO_DECRETO_LEGGE",\n' +
+			'        "number": "25",\n' +
+			'        "year": "1944",\n' +
+			'        "article": "Art. 1, comma 1"\n' +
+			'      },\n' +
+			'      "evidence": "ha disposto (con l\'art. 1, comma 1) l\'abrogazione del comma terzo dell\'art. 1.",\n' +
+			'      "confidence": 0.99\n' +
+			'    }\n' +
+			'  ]\n' +
+			'}\n\n' +
+			'---\n\n' +
+			`Cronistoria delle Novelle e Aggiornamenti all'Atto da analizzare (${updates.length} ${updates.length === 1 ? 'voce' : 'voci'} di aggiornamento):\n\n` +
+			updatesText
+		);
+	}
+
 	const articles = articlesForBatch(workset, batch);
 	const articlesText = articles
 		.map((art, idx) => {
@@ -85,9 +128,33 @@ export async function startAnalysis(
 	if (canReuse(batch, provider)) {
 		reused = true;
 	} else {
-		const articles = articlesForBatch(workset, batch);
-		if (articles.length === 0) {
-			throw new PromptError('Il batch non contiene articoli da analizzare.');
+		let promptArticlesPayload: any[] = [];
+
+		if (workset.actUpdates && workset.actUpdates.length > 0) {
+			const updates = actUpdatesForBatch(workset, batch);
+			if (updates.length === 0) {
+				throw new PromptError('Il batch non contiene voci di aggiornamento da analizzare.');
+			}
+			promptArticlesPayload = updates.map((u, idx) => ({
+				numero: u.progr || String(idx + 1),
+				progr: u.progr || String(idx + 1),
+				data_pubblicazione: u.data_pubblicazione || '',
+				atto_modificante: u.atto_modificante || '',
+				testo: u.testo_disposizione,
+				rubrica: u.atto_modificante || 'Novella legislativa',
+				candidates: u.target_articles_detected || [],
+			}));
+		} else {
+			const articles = articlesForBatch(workset, batch);
+			if (articles.length === 0) {
+				throw new PromptError('Il batch non contiene articoli da analizzare.');
+			}
+			promptArticlesPayload = articles.map((article) => ({
+				numero: article.numero,
+				testo: article.testo,
+				rubrica: article.rubrica,
+				candidates: article.candidates.slice(0, 6).map((candidate) => candidate.text),
+			}));
 		}
 
 		let promptContent = '';
@@ -100,12 +167,7 @@ export async function startAnalysis(
 				jobId: workset.jobId,
 				provider,
 				installationId,
-				articles: articles.map((article) => ({
-					numero: article.numero,
-					testo: article.testo,
-					rubrica: article.rubrica,
-					candidates: article.candidates.slice(0, 6).map((candidate) => candidate.text)
-				}))
+				articles: promptArticlesPayload,
 			});
 
 			validatePromptResponse(response, provider);

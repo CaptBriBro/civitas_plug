@@ -138,4 +138,23 @@ export class NormattivaClient {
   async getArticleHtml(caricaParams: string, urn: string): Promise<string> {
     return this.get(`${this.baseUrl}/atto/caricaArticolo?${caricaParams}`, urn);
   }
+
+  /** HTML della tabella degli aggiornamenti all'atto (cronologia delle novelle). */
+  async getActUpdatesHtml(urn: string, codiceRedazionale?: string, dataGazzetta?: string): Promise<string> {
+    const info = await this.warmup(urn);
+    const cod = codiceRedazionale || info.codiceRedazionale;
+    const dgu = dataGazzetta || info.dataPubblicazioneGazzetta;
+
+    if (!cod || !dgu) {
+      throw new NormattivaError(
+        "Impossibile identificare l'atto su Normattiva per gli aggiornamenti.",
+      );
+    }
+
+    const url =
+      `${this.baseUrl}/do/atto/vediAggiornamentiAllAtto?atto.dataPubblicazioneGazzetta=${dgu}` +
+      `&atto.codiceRedazionale=${cod}`;
+
+    return this.get(url, urn);
+  }
 }

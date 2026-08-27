@@ -16,13 +16,28 @@ export type BatchStatus =
 
 export type WorksetStatus = 'empty' | 'downloading' | 'ready' | 'in_progress' | 'complete';
 
+export interface ActUpdateEntry {
+  progr?: string | null;
+  data_pubblicazione?: string | null;
+  atto_modificante?: string | null;
+  testo_disposizione: string;
+  target_articles_detected: string[];
+}
+
 export interface ExtractedRelation {
   source_article?: string;
   target_article?: string;
+  target_paragraph?: string;
   family?: string;
   relation_type?: string;
   evidence?: string;
   confidence?: number;
+  source_act?: Record<string, unknown>;
+  source_act_public_id?: string;
+  modifying_act?: Record<string, unknown>;
+  is_broken?: boolean;
+  broken_reason?: string;
+  link_status?: 'RESOLVED_LINK' | 'BROKEN_LINK' | string;
   extra?: Record<string, unknown>;
 }
 
@@ -42,6 +57,8 @@ export interface WorksetBatch {
   rawResponseChatGPT?: string;
   rawResponseGemini?: string;
   relations: ExtractedRelation[];
+  relationDecisions?: Record<string, 'approved' | 'rejected' | 'pending'>;
+  editedRelations?: Record<string, ExtractedRelation>;
   parseWarning?: string;
   errorMessage?: string;
   updatedAt: string;
@@ -62,6 +79,7 @@ export interface Workset {
   actUrn: string | null;
   status: WorksetStatus;
   articles: LegalArticle[];
+  actUpdates?: ActUpdateEntry[];
   batches: WorksetBatch[];
   progress: DownloadProgress;
   createdAt: string;

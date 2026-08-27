@@ -23,14 +23,22 @@
 			{#each relations as relation, index (index)}
 				<div class="rounded-xl bg-white border border-purple-200 p-2.5 space-y-1.5">
 					<div class="flex items-center gap-2 flex-wrap">
-						{#if relation.source_article}
+						{#if relation.source_act}
+							<Badge variant="amber">
+								{relation.source_act.type || 'ATTO'} {relation.source_act.number ? `n. ${relation.source_act.number}` : ''} {relation.source_act.year ? `/${relation.source_act.year}` : ''}
+							</Badge>
+						{:else if relation.source_article}
 							<Badge variant="purple">art. {relation.source_article}</Badge>
 						{/if}
 						<span class="text-purple-400 text-xs">→</span>
 						{#if relation.target_article}
-							<Badge variant="indigo">art. {relation.target_article}</Badge>
+							<Badge variant="indigo">art. {relation.target_article}{relation.target_paragraph ? ` c. ${relation.target_paragraph}` : ''}</Badge>
 						{/if}
-						{#if relation.family}
+						{#if relation.relation_type}
+							<span class="text-[10px] font-bold uppercase tracking-wider text-rose-800 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-200">
+								{relation.relation_type}
+							</span>
+						{:else if relation.family}
 							<span class="text-[10px] font-bold uppercase tracking-wider text-purple-800">
 								{relation.family}
 							</span>
@@ -40,7 +48,7 @@
 						{/if}
 					</div>
 					{#if relation.evidence}
-						<p class="text-[11px] text-[#57534E] italic leading-relaxed">"{relation.evidence}"</p>
+						<p class="text-[11px] text-[#57534E] italic leading-relaxed font-serif">"{relation.evidence}"</p>
 					{/if}
 				</div>
 			{/each}

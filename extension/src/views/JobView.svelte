@@ -16,6 +16,7 @@
 	import DownloadProgress from '@/components/jobs/DownloadProgress.svelte';
 	import JobReportTab from '@/components/jobs/JobReportTab.svelte';
 	import JobArticlesTab from '@/components/jobs/JobArticlesTab.svelte';
+	import JobUpdatesTab from '@/components/jobs/JobUpdatesTab.svelte';
 	import JobCandidatesTab from '@/components/jobs/JobCandidatesTab.svelte';
 	import JobReferencesTab from '@/components/jobs/JobReferencesTab.svelte';
 	import JobLinkedLawsTab from '@/components/jobs/JobLinkedLawsTab.svelte';
@@ -50,11 +51,14 @@
 	});
 
 	let articlesCount = $derived(workset?.articles.length || 0);
+	let actUpdatesCount = $derived(workset?.actUpdates?.length || 0);
+	let isUpdatesTask = $derived((workset?.actUpdates?.length || 0) > 0 || job?.task_type === 'ACT_UPDATES');
 	let batchesCount = $derived(workset?.batches.length || 0);
 	let approvedBatches = $derived((workset?.batches || []).filter((b) => b.status === 'imported'));
 
 	let candidatesCount = $derived.by(() => {
 		if (!workset) return 0;
+		if (isUpdatesTask && workset.actUpdates) return workset.actUpdates.length;
 		return workset.articles.reduce((acc, a) => acc + (a.candidates?.length || 0), 0);
 	});
 
@@ -75,7 +79,7 @@
 	});
 
 	let progressPercent = $derived(worksetStore.progressPercent);
-	let isCompleted = $derived(articlesCount > 0 && !worksetStore.downloading);
+	let isCompleted = $derived(workset?.status === 'ready');
 </script>
 
 <div
@@ -141,19 +145,28 @@
 							<BarChart3 class="w-3.5 h-3.5 text-amber-500" /> Report & Sintesi
 						</button>
 
-						<button
-							onclick={() => (activeTab = 'articles')}
-							class="px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shrink-0 cursor-pointer {activeTab === 'articles' ? 'bg-[#7A2222] text-white shadow-2xs' : 'bg-[#FAF6F0] text-[#57534E] hover:bg-[#F5EBE6]'}"
-						>
-							<BookOpen class="w-3.5 h-3.5" /> Articoli Estratti ({articlesCount})
-						</button>
+						{#if isUpdatesTask}
+							<button
+								onclick={() => (activeTab = 'articles')}
+								class="px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shrink-0 cursor-pointer {activeTab === 'articles' ? 'bg-[#7A2222] text-white shadow-2xs' : 'bg-[#FAF6F0] text-[#57534E] hover:bg-[#F5EBE6]'}"
+							>
+								<BookOpen class="w-3.5 h-3.5" /> Modifiche & Novelle ({actUpdatesCount})
+							</button>
+						{:else}
+							<button
+								onclick={() => (activeTab = 'articles')}
+								class="px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shrink-0 cursor-pointer {activeTab === 'articles' ? 'bg-[#7A2222] text-white shadow-2xs' : 'bg-[#FAF6F0] text-[#57534E] hover:bg-[#F5EBE6]'}"
+							>
+								<BookOpen class="w-3.5 h-3.5" /> Articoli Estratti ({articlesCount})
+							</button>
+						{/if}
 
 						<!-- SCHEDA CANDIDATI & BATCH SUBITO DOPO ARTICOLI ESTRATTI -->
 						<button
 							onclick={() => (activeTab = 'candidates')}
 							class="px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 shrink-0 cursor-pointer {activeTab === 'candidates' ? 'bg-[#7A2222] text-white shadow-2xs' : 'bg-purple-100/70 text-purple-950 border border-purple-300/80 hover:bg-purple-200/80'}"
 						>
-							<Search class="w-3.5 h-3.5 text-purple-700" /> Candidati & Batch ({candidatesCount})
+							<Search class="w-3.5 h-3.5 text-purple-700" /> {isUpdatesTask ? `Batch Aggiornamenti (${batchesCount})` : `Candidati & Batch (${candidatesCount})`}
 						</button>
 
 						<button
@@ -177,8 +190,9 @@
 							{workset}
 							downloading={worksetStore.downloading}
 							onselecttab={(tab) => (activeTab = tab as any)}
+							onstartdownload={() => worksetStore.startDownload(job)}
 							onstartai={() => {
-								if (workset && workset.articles.length > 0 && batchesCount === 0) {
+								if (workset && ((workset.articles && workset.articles.length > 0) || (workset.actUpdates && workset.actUpdates.length > 0)) && batchesCount === 0) {
 									void worksetStore.regenerateBatches();
 								}
 								activeTab = 'candidates';
@@ -187,16 +201,24 @@
 
 						<DownloadProgress {jobId} onstart={() => worksetStore.startDownload(job)} />
 
-						{#if workset && workset.articles.length > 0}
+						{#if workset && ((workset.articles && workset.articles.length > 0) || (workset.actUpdates && workset.actUpdates.length > 0))}
 							<SubmitPanel />
 						{/if}
 
 					{:else if activeTab === 'articles'}
-						<JobArticlesTab
-							articles={workset?.articles || []}
-							downloading={worksetStore.downloading}
-							onstartdownload={() => worksetStore.startDownload(job)}
-						/>
+						{#if isUpdatesTask}
+							<JobUpdatesTab
+								updates={workset?.actUpdates || []}
+								downloading={worksetStore.downloading}
+								onstartdownload={() => worksetStore.startDownload(job)}
+							/>
+						{:else}
+							<JobArticlesTab
+								articles={workset?.articles || []}
+								downloading={worksetStore.downloading}
+								onstartdownload={() => worksetStore.startDownload(job)}
+							/>
+						{/if}
 
 					{:else if activeTab === 'candidates'}
 						<JobCandidatesTab {workset} {jobId} />
@@ -226,8 +248,10 @@
 									<Badge variant="green">COMPLETATO LOCALE (100%)</Badge>
 								{:else if worksetStore.downloading}
 									<Badge variant="amber">IN ESECUZIONE ({progressPercent}%)</Badge>
+								{:else if progressPercent > 0}
+									<Badge variant="stone">PAUSATO ({progressPercent}%)</Badge>
 								{:else}
-									<Badge variant="amber">IN ATTESA (0%)</Badge>
+									<Badge variant="stone">NON AVVIATO (0%)</Badge>
 								{/if}
 							</div>
 

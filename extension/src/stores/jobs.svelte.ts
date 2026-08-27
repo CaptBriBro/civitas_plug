@@ -1,6 +1,6 @@
 /** Catalogo delle attività Civitas. Pubblico: non richiede il collegamento. */
 import type { JobDetail, JobSummary } from '@/domain/job';
-import { fetchJob, fetchJobs } from '@/services/api/endpoints/jobs';
+import { fetchJob, fetchJobs, proposeJob } from '@/services/api/endpoints/jobs';
 import { listWorksets, loadWorkset } from '@/services/storage/worksetStore';
 import { worksetStore } from './workset.svelte';
 import { messageFor } from '@/services/api/errors';
@@ -13,6 +13,7 @@ class JobsStore {
 
   search = $state('');
   downloadableOnly = $state(true);
+  selectedTaskType = $state<string>('ALL');
 
   /** jobId dei workset già presenti in locale, per marcarli nella lista. */
   startedJobIds = $state<Set<string>>(new Set());
@@ -21,9 +22,24 @@ class JobsStore {
   detailLoading = $state(false);
 
   get filtered(): JobSummary[] {
+    let list = this.jobs;
+
+    if (this.selectedTaskType !== 'ALL') {
+      list = list.filter((job) => {
+        if (this.selectedTaskType === 'ACT_UPDATES') {
+          return job.task_type === 'ACT_UPDATES' || job.id.endsWith('-updates');
+        }
+        if (this.selectedTaskType === 'DOWNLOAD_ARTICLES') {
+          return job.task_type === 'DOWNLOAD_ARTICLES' || !job.id.endsWith('-updates');
+        }
+        return job.task_type === this.selectedTaskType;
+      });
+    }
+
     const query = this.search.trim().toLowerCase();
-    if (!query) return this.jobs;
-    return this.jobs.filter(
+    if (!query) return list;
+
+    return list.filter(
       (job) =>
         job.title.toLowerCase().includes(query) || job.description.toLowerCase().includes(query),
     );
@@ -73,9 +89,25 @@ class JobsStore {
     }
   }
 
+  async proposeTask(title: string, urn?: string | null): Promise<JobDetail | null> {
+    this.loading = true;
+    this.error = null;
+    try {
+      const detail = await proposeJob({ title, urn: urn || undefined });
+      await this.load();
+      return detail;
+    } catch (err) {
+      this.error = messageFor(err);
+      return null;
+    } finally {
+      this.loading = false;
+    }
+  }
+
   async loadDetail(jobId: string): Promise<JobDetail | null> {
     this.detailLoading = true;
     this.error = null;
+    this.detail = null;
     try {
       this.detail = await fetchJob(jobId);
       return this.detail;

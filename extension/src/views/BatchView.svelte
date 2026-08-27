@@ -19,6 +19,9 @@
 
 	let batch = $derived(worksetStore.workset?.batches.find((b) => b.id === batchId));
 	let articles = $derived(batch ? worksetStore.articlesOf(batch) : []);
+	let actUpdates = $derived(batch ? worksetStore.actUpdatesOf(batch) : []);
+	let isUpdatesTask = $derived((worksetStore.workset?.actUpdates?.length || 0) > 0);
+	let itemsCount = $derived(isUpdatesTask ? actUpdates.length : articles.length);
 	let articlesExpanded = $state(false);
 
 	$effect(() => {
@@ -53,7 +56,7 @@
 						</h2>
 					</div>
 					<p class="text-xs text-[#78716C]">
-						{articles.length} {articles.length === 1 ? 'articolo' : 'articoli'} · {worksetStore.workset?.jobTitle || ''}
+						{itemsCount} {isUpdatesTask ? (itemsCount === 1 ? 'novella' : 'novelle') : (itemsCount === 1 ? 'articolo' : 'articoli')} · {worksetStore.workset?.jobTitle || ''}
 					</p>
 				</div>
 
@@ -79,7 +82,7 @@
 						<Alert tone="error" message={worksetStore.error} />
 					{/if}
 
-					<!-- FISARMONICA ARTICOLI INCLUSI NEL BATCH (NORMALE CHIUSO) -->
+					<!-- FISARMONICA ARTICOLI O AGGIORNAMENTI INCLUSI NEL BATCH -->
 					<div class="border border-[#E7DFD5] rounded-xl bg-[#FAF6F0] overflow-hidden shadow-2xs">
 						<button
 							type="button"
@@ -88,10 +91,10 @@
 						>
 							<span class="flex items-center gap-2">
 								<BookOpen class="w-4 h-4 text-[#7A2222]" />
-								Articoli inclusi nel Batch ({articles.length})
+								{isUpdatesTask ? `Novelle e Aggiornamenti inclusi (${actUpdates.length})` : `Articoli inclusi nel Batch (${articles.length})`}
 								{#if batch.articleNumbers.length > 0}
 									<span class="text-[11px] font-mono text-stone-500 font-normal">
-										(artt. {batch.articleNumbers.join(', ')})
+										({isUpdatesTask ? 'voci' : 'artt.'} {batch.articleNumbers.join(', ')})
 									</span>
 								{/if}
 							</span>
@@ -103,10 +106,25 @@
 						</button>
 
 						{#if articlesExpanded}
-							<div class="p-4 border-t border-[#E7DFD5] bg-white space-y-2 max-h-[320px] overflow-y-auto animate-in fade-in">
-								{#each articles as article (article.numero)}
-									<ArticleText {article} />
-								{/each}
+							<div class="p-4 border-t border-[#E7DFD5] bg-white space-y-2.5 max-h-[320px] overflow-y-auto animate-in fade-in">
+								{#if isUpdatesTask}
+									{#each actUpdates as update, idx (idx)}
+										<div class="p-3 bg-[#FAF6F0] rounded-xl border border-[#E7DFD5] space-y-1.5 text-xs font-serif">
+											<div class="flex items-center justify-between text-[11px] font-mono font-bold text-[#7A2222]">
+												<span>Progr. {update.progr || '-'}</span>
+												<span>{update.data_pubblicazione || ''}</span>
+											</div>
+											{#if update.atto_modificante}
+												<div class="text-[11px] font-semibold text-stone-800">{update.atto_modificante}</div>
+											{/if}
+											<div class="text-[#57534E] leading-relaxed whitespace-pre-wrap">{update.testo_disposizione}</div>
+										</div>
+									{/each}
+								{:else}
+									{#each articles as article (article.numero)}
+										<ArticleText {article} />
+									{/each}
+								{/if}
 							</div>
 						{/if}
 					</div>

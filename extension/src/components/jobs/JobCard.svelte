@@ -27,7 +27,11 @@
 	</div>
 
 	<div class="flex items-center gap-2 mt-3 flex-wrap">
-		{#if job.article_count}
+		{#if job.task_type === 'ACT_UPDATES'}
+			<Badge variant="amber">
+				📜 Aggiornamenti Atto
+			</Badge>
+		{:else if job.article_count}
 			<Badge variant="stone">
 				<BookOpen class="w-3 h-3" />
 				{job.article_start}–{job.article_end} · {job.article_count} artt.

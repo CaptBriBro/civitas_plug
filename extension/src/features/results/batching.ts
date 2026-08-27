@@ -22,11 +22,31 @@ export function candidateArticles(
     .sort((a, b) => a.ordering - b.ordering);
 }
 
-export function buildBatches(articles: LegalArticle[], options: BatchOptions = {}): WorksetBatch[] {
-  const size = Math.max(1, options.batchSize ?? 5);
-  const selected = candidateArticles(articles, options.threshold ?? DEFAULT_THRESHOLD);
+export function buildBatches(
+  articles: LegalArticle[],
+  options: BatchOptions = {},
+  actUpdates?: any[]
+): WorksetBatch[] {
+  const size = Math.max(1, options.batchSize ?? (actUpdates && actUpdates.length > 0 ? 10 : 5));
   const now = new Date().toISOString();
   const batches: WorksetBatch[] = [];
+
+  // Se siamo in un task di aggiornamenti atto
+  if (actUpdates && actUpdates.length > 0) {
+    for (let i = 0; i < actUpdates.length; i += size) {
+      const slice = actUpdates.slice(i, i + size);
+      batches.push({
+        id: `batch-${String(batches.length + 1).padStart(3, '0')}`,
+        articleNumbers: slice.map((_: any, idx: number) => String(i + idx)),
+        status: 'pending',
+        relations: [],
+        updatedAt: now,
+      });
+    }
+    return batches;
+  }
+
+  const selected = candidateArticles(articles, options.threshold ?? DEFAULT_THRESHOLD);
 
   for (let i = 0; i < selected.length; i += size) {
     const slice = selected.slice(i, i + size);
@@ -45,10 +65,26 @@ export function buildBatches(articles: LegalArticle[], options: BatchOptions = {
 /** Ricalcola i batch conservando il lavoro già importato.
  *
  *  Cambiare soglia o dimensione dei batch non deve buttare via le risposte
- *  che l'utente ha già incollato. */
-export function rebuildBatches(workset: Workset, options: BatchOptions = {}): WorksetBatch[] {
-  const imported = workset.batches.filter((batch) => batch.status === 'imported');
+ *  che l'utente ha già incollato, a meno che non venga richiesto esplicitamente
+ *  con `keepImported: false` (rigenerazione completa, anche dei batch validati). */
+export function rebuildBatches(
+  workset: Workset,
+  options: BatchOptions = {},
+  { keepImported = true }: { keepImported?: boolean } = {},
+): WorksetBatch[] {
+  const imported = keepImported ? workset.batches.filter((batch) => batch.status === 'imported') : [];
   const consumed = new Set(imported.flatMap((batch) => batch.articleNumbers));
+
+  if (workset.actUpdates && workset.actUpdates.length > 0) {
+    const remainingUpdates = workset.actUpdates.filter(
+      (_, idx) => !consumed.has(String(idx))
+    );
+    const fresh = buildBatches([], options, remainingUpdates).map((batch, index) => ({
+      ...batch,
+      id: `batch-${String(imported.length + index + 1).padStart(3, '0')}`,
+    }));
+    return [...imported, ...fresh];
+  }
 
   const remaining = workset.articles.filter((article) => !consumed.has(article.numero));
   const fresh = buildBatches(remaining, options).map((batch, index) => ({
@@ -82,4 +118,12 @@ export function articlesForBatch(workset: Workset, batch: WorksetBatch): LegalAr
     const artClean = artStr.replace(/^(art\.|articolo)\s*/i, '').trim().toLowerCase();
     return wanted.has(artStr) || wanted.has(artClean) || wanted.has(artStr.toLowerCase());
   });
+}
+
+export function actUpdatesForBatch(workset: Workset, batch: WorksetBatch): any[] {
+  if (!workset || !batch || !workset.actUpdates) return [];
+  const wanted = new Set(batch.articleNumbers.map(n => String(n).trim()));
+  return workset.actUpdates.filter(
+    (u, idx) => wanted.has(String(idx)) || wanted.has(String(idx + 1)) || (u.progr ? wanted.has(String(u.progr).trim()) : false)
+  );
 }

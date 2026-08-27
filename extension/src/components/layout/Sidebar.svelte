@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { CheckSquare, Link2, Settings } from 'lucide-svelte';
+	import { CheckSquare, Settings, FileText } from 'lucide-svelte';
 	import { router } from '@/router.svelte';
 	import { authStore } from '@/stores/auth.svelte';
 
 	const items = [
 		{ hash: '#/', match: ['jobs', 'job', 'batch'], label: 'Attività Civitas', Icon: CheckSquare },
-		{ hash: '#/link', match: ['link'], label: 'Account', Icon: Link2 },
+		{ hash: '#/prompts', match: ['prompts'], label: 'Prompt scaricati', Icon: FileText },
 		{ hash: '#/settings', match: ['settings'], label: 'Impostazioni', Icon: Settings }
 	];
 </script>

@@ -9,6 +9,10 @@ export interface JobSource {
   tipo_atto: string | null;
   article_start: number | null;
   article_end: number | null;
+  exclude_unit_path_pattern?: string | null;
+  include_unit_path_pattern?: string | null;
+  min_ordering?: number | null;
+  max_ordering?: number | null;
 }
 
 export interface JobSummary {

@@ -3,12 +3,13 @@ import type { JobDetail } from '@/domain/job';
 import type { ProviderId } from '@/domain/prompt';
 import type { Workset, WorksetBatch, WorksetStats } from '@/domain/workset';
 import { loadWorkset, saveWorkset, updateBatch } from '@/services/storage/worksetStore';
-import { rebuildBatches, statsFor, articlesForBatch } from '@/features/results/batching';
+import { rebuildBatches, statsFor, articlesForBatch, actUpdatesForBatch } from '@/features/results/batching';
 import { parseAiResponse } from '@/features/results/responseParser';
 import { startAnalysis } from '@/features/ai/providerFlow';
 import { sendMessage, onEvent } from '@/messaging/messages';
 import { messageFor } from '@/services/api/errors';
 import { settingsStore } from './settings.svelte';
+import { inferUrn } from '@/features/articles/fetchService';
 
 class WorksetStore {
   workset = $state<Workset | null>(null);
@@ -29,12 +30,23 @@ class WorksetStore {
     return Math.min(100, Math.round((progress.fetched / progress.total) * 100));
   }
 
+  getBatch(batchId: string): WorksetBatch | undefined {
+    return this.workset?.batches.find((b) => b.id === batchId);
+  }
+
   async load(jobId: string): Promise<void> {
     this.loading = true;
     this.error = null;
+    this.busyBatchId = null;
     try {
-      this.workset = (await loadWorkset(jobId)) ?? null;
-      this.downloading = this.workset?.status === 'downloading';
+      const loaded = await loadWorkset(jobId);
+      if (loaded) {
+        this.workset = { ...loaded };
+        this.downloading = this.workset.status === 'downloading';
+      } else {
+        this.workset = null;
+        this.downloading = false;
+      }
     } catch (err) {
       this.error = messageFor(err);
     } finally {
@@ -45,6 +57,28 @@ class WorksetStore {
   async startDownload(job: JobDetail): Promise<void> {
     this.error = null;
     this.downloading = true;
+
+    const urn = inferUrn(job.title, this.workset?.actUrn || job.source?.urn);
+    const existingWorkset = (await loadWorkset(job.id)) ?? this.workset;
+    const initialWorkset: Workset = {
+      jobId: job.id,
+      jobTitle: job.title,
+      actUrn: urn,
+      status: 'downloading',
+      articles: existingWorkset?.articles ?? [],
+      batches: existingWorkset?.batches ?? [],
+      progress: {
+        fetched: existingWorkset?.articles.length ?? 0,
+        total: existingWorkset?.progress.total ?? 0,
+        lastArticle: null,
+        resumeFrom: null,
+        error: null,
+      },
+      createdAt: existingWorkset?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.workset = await saveWorkset(initialWorkset);
 
     const response = await sendMessage({ type: 'START_DOWNLOAD', jobId: job.id });
     if (!response.started) {
@@ -65,9 +99,10 @@ class WorksetStore {
       if (this.downloading) {
         await this.cancelDownload(jobId);
       }
+      const urn = inferUrn(this.workset?.jobTitle || '', this.workset?.actUrn);
       const emptyWorkset: Workset = {
         jobId,
-        actUrn: this.workset?.actUrn ?? null,
+        actUrn: urn,
         jobTitle: this.workset?.jobTitle ?? '',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -89,32 +124,55 @@ class WorksetStore {
     return onEvent((event) => {
       if (event.type !== 'DOWNLOAD_PROGRESS' || event.jobId !== jobId) return;
 
-      if (this.workset) {
-        this.workset.progress = {
-          ...this.workset.progress,
-          fetched: event.fetched,
-          total: event.total,
-          lastArticle: event.lastArticle,
-          error: event.error,
-        };
+      void (async () => {
+        const loaded = await loadWorkset(jobId);
+        if (loaded) {
+          this.workset = {
+            ...loaded,
+            progress: {
+              ...loaded.progress,
+              fetched: event.fetched,
+              total: event.total,
+              lastArticle: event.lastArticle,
+              error: event.error,
+            },
+          };
+        } else if (this.workset) {
+          this.workset.progress = {
+            ...this.workset.progress,
+            fetched: event.fetched,
+            total: event.total,
+            lastArticle: event.lastArticle,
+            error: event.error,
+          };
+        }
+
+        if (event.error) {
+          this.error = event.error;
+        }
 
         if (event.done || event.error) {
           this.downloading = false;
-          void this.load(jobId);
+        } else {
+          this.downloading = true;
         }
-      }
+      })();
     });
   }
 
-  async regenerateBatches(): Promise<void> {
+  async regenerateBatches(options?: { batchSize?: number; keepImported?: boolean }): Promise<void> {
     if (!this.workset) return;
     this.error = null;
 
     try {
-      const batches = rebuildBatches(this.workset, {
-        batchSize: settingsStore.effectiveBatchSize,
-        threshold: settingsStore.settings.candidateThreshold,
-      });
+      const batches = rebuildBatches(
+        this.workset,
+        {
+          batchSize: options?.batchSize ?? settingsStore.effectiveBatchSize,
+          threshold: settingsStore.settings.candidateThreshold,
+        },
+        { keepImported: options?.keepImported ?? true },
+      );
 
       const updated = await saveWorkset({ ...this.workset, batches, status: 'in_progress' });
       this.workset = { ...updated };
@@ -131,6 +189,10 @@ class WorksetStore {
 
   articlesOf(batch: WorksetBatch) {
     return this.workset ? articlesForBatch(this.workset, batch) : [];
+  }
+
+  actUpdatesOf(batch: WorksetBatch) {
+    return this.workset ? actUpdatesForBatch(this.workset, batch) : [];
   }
 
   async analyzeBatch(batch: WorksetBatch, provider: ProviderId): Promise<string | null> {
@@ -173,7 +235,9 @@ class WorksetStore {
   async importResponse(
     batchId: string,
     rawResponse: string,
-    provider?: ProviderId
+    provider?: ProviderId,
+    relationDecisions?: Record<string, 'approved' | 'rejected' | 'pending'>,
+    editedRelations?: Record<string, ExtractedRelation>
   ): Promise<string | undefined> {
     if (!this.workset) return undefined;
 
@@ -187,6 +251,8 @@ class WorksetStore {
       rawResponse,
       relations: parsed.relations,
       parseWarning: parsed.warning,
+      relationDecisions,
+      editedRelations
     };
 
     if (targetProvider === 'chatgpt') patch.rawResponseChatGPT = rawResponse;
