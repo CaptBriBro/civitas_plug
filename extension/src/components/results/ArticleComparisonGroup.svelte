@@ -248,6 +248,21 @@
 		</div>
 	{/if}
 
+	<!-- NESSUNA RELAZIONE ESTRATTA DAI MODELLI -->
+	{#if artGroup.agreed.length === 0 && artGroup.onlyChatGPT.length === 0 && artGroup.onlyGemini.length === 0}
+		<div class="p-4 bg-stone-50 border border-stone-200/80 rounded-xl text-xs space-y-1 text-stone-600">
+			<div class="flex items-center gap-2 font-semibold text-stone-700">
+				<Info class="w-4 h-4 text-stone-500 shrink-0" />
+				<span>{isUpdatesTask ? 'Nessuna relazione rilevata dai modelli per questa disposizione novellante.' : 'Nessuna relazione individuata per questo articolo.'}</span>
+			</div>
+			<p class="text-[11px] text-stone-500 pl-6">
+				{isUpdatesTask
+					? 'La disposizione potrebbe avere natura meramente formale, procedurale o abrogativa tacita non associata a specifici commi. Puoi comunque approvarla come esaminata o integrare manualmente le relazioni.'
+					: 'L\'articolo non sembra contenere rinvii normativi o abrogazioni esplicite secondo l\'analisi dei modelli AI.'}
+			</p>
+		</div>
+	{/if}
+
 	<!-- LISTA CANDIDATI TESTUALI ESCLUSI DALL'AI MA RILEVATI EURISTICAMENTE -->
 	{#if artGroup.missingCandidates.length > 0}
 		<div class="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs space-y-2">

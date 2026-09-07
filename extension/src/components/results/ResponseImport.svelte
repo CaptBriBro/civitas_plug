@@ -161,7 +161,10 @@
 		return { agreed, onlyChatGPT, onlyGemini };
 	});
 
-	function openFullDashboardCompare() {
+	async function openFullDashboardCompare() {
+		if (batch) {
+			await worksetStore.saveDraftResponses(batch.id, draftChatGPT, draftGemini);
+		}
 		const jobId = worksetStore.workset?.jobId || '';
 		void openDashboard(`#/job/${encodeURIComponent(jobId)}/batch/${batch.id}/compare`);
 	}

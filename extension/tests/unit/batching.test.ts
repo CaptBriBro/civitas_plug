@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBatches, candidateArticles, rebuildBatches, statsFor } from '@/features/results/batching';
+import { buildBatches, candidateArticles, rebuildBatches, statsFor, actUpdatesForBatch } from '@/features/results/batching';
 import type { LegalArticle } from '@/domain/article';
 import type { Workset } from '@/domain/workset';
 
@@ -138,5 +138,64 @@ describe('statsFor', () => {
       imported: 1,
       relations: 2,
     });
+  });
+});
+
+describe('actUpdates batching', () => {
+  const updates = [
+    { progr: '1', testo_disposizione: 'Modifica art. 8', target_articles_detected: ['8'] },
+    { progr: '1', testo_disposizione: 'Modifica art. 19', target_articles_detected: ['19'] },
+    { progr: '1', testo_disposizione: 'Modifica art. 28', target_articles_detected: ['28'] },
+    { progr: '2', testo_disposizione: 'Modifica art. 50', target_articles_detected: ['50'] },
+    { progr: '2', testo_disposizione: 'Modifica art. 60', target_articles_detected: ['60'] },
+  ];
+
+  it('costruisce i batch preservando gli indici univoci delle disposizioni', () => {
+    const batches = buildBatches([], { batchSize: 2 }, updates);
+    expect(batches).toHaveLength(3);
+    expect(batches[0]?.articleNumbers).toEqual(['0', '1']);
+    expect(batches[1]?.articleNumbers).toEqual(['2', '3']);
+    expect(batches[2]?.articleNumbers).toEqual(['4']);
+  });
+
+  it('actUpdatesForBatch estrae esattamente le voci del batch senza duplicazioni', () => {
+    const ws = workset({ actUpdates: updates });
+    const batch1 = { id: 'batch-001', articleNumbers: ['0', '1'], status: 'pending' as const, relations: [], updatedAt: '' };
+    const batch2 = { id: 'batch-002', articleNumbers: ['2', '3'], status: 'pending' as const, relations: [], updatedAt: '' };
+
+    const u1 = actUpdatesForBatch(ws, batch1);
+    const u2 = actUpdatesForBatch(ws, batch2);
+
+    expect(u1).toHaveLength(2);
+    expect(u1[0]?.testo_disposizione).toBe('Modifica art. 8');
+    expect(u1[1]?.testo_disposizione).toBe('Modifica art. 19');
+
+    expect(u2).toHaveLength(2);
+    expect(u2[0]?.testo_disposizione).toBe('Modifica art. 28');
+    expect(u2[1]?.testo_disposizione).toBe('Modifica art. 50');
+  });
+
+  it('rebuildBatches per actUpdates conserva i batch importati e mantiene gli indici corretti', () => {
+    const ws = workset({
+      actUpdates: updates,
+      batches: [
+        {
+          id: 'batch-001',
+          articleNumbers: ['0', '1'],
+          status: 'imported',
+          relations: [{ source_article: '1', target_article: '8' }],
+          updatedAt: '',
+        },
+      ],
+    });
+
+    const rebuilt = rebuildBatches(ws, { batchSize: 2 }, { keepImported: true });
+    expect(rebuilt).toHaveLength(3);
+    expect(rebuilt[0]?.id).toBe('batch-001');
+    expect(rebuilt[0]?.status).toBe('imported');
+
+    // Il batch 2 deve contenere gli indici 2 e 3 del workset originale, non 0 e 1!
+    expect(rebuilt[1]?.articleNumbers).toEqual(['2', '3']);
+    expect(rebuilt[2]?.articleNumbers).toEqual(['4']);
   });
 });

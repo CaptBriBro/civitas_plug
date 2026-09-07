@@ -95,20 +95,50 @@ function normalizeRelation(raw: unknown): ExtractedRelation | null {
     }
   }
 
+  if (sourceArticle) {
+    sourceArticle = sourceArticle.replace(/^(art\.|articolo|art)\s*/i, '').trim();
+  }
+
+  if (targetArticle) {
+    targetArticle = targetArticle.replace(/^(art\.|articolo|art)\s*/i, '').trim();
+  }
+
+  // Estrae in modo robusto l'indice della voce del batch (entry_index)
+  let entryIndex: number | undefined = undefined;
+  const rawEntry = record['entry_index'] ?? record['entry_id'] ?? record['voce'] ?? record['entry'];
+  if (typeof rawEntry === 'number' && Number.isInteger(rawEntry) && rawEntry > 0) {
+    entryIndex = rawEntry;
+  } else if (typeof rawEntry === 'string') {
+    const parsedInt = parseInt(rawEntry.replace(/[^0-9]/g, ''), 10);
+    if (!isNaN(parsedInt) && parsedInt > 0) {
+      entryIndex = parsedInt;
+    }
+  }
+
   // Estrae in modo robusto il comma/paragrafo target
   const targetParagraph = asString('target_paragraph') ?? asString('target_paragraph_target') ?? asString('comma') ?? asString('paragrafo');
 
   // Estrae in modo robusto l'evidenza testuale
   const evidence = asString('evidence') ?? asString('evidenza') ?? asString('source_evidence');
 
+  const sourceAct = record['source_act'] && typeof record['source_act'] === 'object'
+    ? (record['source_act'] as Record<string, unknown>)
+    : (record['modifying_act'] && typeof record['modifying_act'] === 'object' ? (record['modifying_act'] as Record<string, unknown>) : undefined);
+
+  const modifyingAct = record['modifying_act'] && typeof record['modifying_act'] === 'object'
+    ? (record['modifying_act'] as Record<string, unknown>)
+    : undefined;
+
   const relation: ExtractedRelation = {
+    entry_index: entryIndex,
     source_article: sourceArticle,
     target_article: targetArticle,
     target_paragraph: targetParagraph,
     family: asString('family') ?? asString('famiglia'),
     relation_type: asString('relation_type') ?? asString('tipo_relazione') ?? asString('type'),
     evidence: evidence,
-    source_act: record['source_act'] && typeof record['source_act'] === 'object' ? (record['source_act'] as Record<string, unknown>) : undefined
+    source_act: sourceAct,
+    modifying_act: modifyingAct
   };
 
   const confidence = record['confidence'] ?? record['relation_confidence'];
@@ -117,11 +147,12 @@ function normalizeRelation(raw: unknown): ExtractedRelation | null {
   }
 
   const known = new Set([
+    'entry_index', 'entry_id', 'voce', 'entry',
     'source_article', 'articolo_fonte', 'target_article', 'articolo_target',
     'target_paragraph', 'comma', 'paragrafo',
     'family', 'famiglia', 'relation_type', 'tipo_relazione', 'type',
     'evidence', 'evidenza', 'source_evidence', 'confidence', 'relation_confidence',
-    'source_act'
+    'source_act', 'modifying_act'
   ]);
   const extra = Object.fromEntries(Object.entries(record).filter(([key]) => !known.has(key)));
   if (Object.keys(extra).length > 0) relation.extra = extra;

@@ -8,16 +8,16 @@
 		Check,
 		RotateCcw,
 		CheckCheck,
-		Filter
+		Filter,
+		ChevronUp,
+		ChevronDown
 	} from 'lucide-svelte';
 	import Alert from '@/components/ui/Alert.svelte';
 	import Button from '@/components/ui/Button.svelte';
 	import Badge from '@/components/ui/Badge.svelte';
 	import Spinner from '@/components/ui/Spinner.svelte';
-	import { onMount } from 'svelte';
-	import { listWorksets } from '@/services/storage/worksetStore';
+	import { listWorksets, updateBatch } from '@/services/storage/worksetStore';
 	import { worksetStore } from '@/stores/workset.svelte';
-	import { jobsStore } from '@/stores/jobs.svelte';
 	import { activityStore } from '@/stores/activity.svelte';
 	import { router } from '@/router.svelte';
 	import { parseAiResponse } from '@/features/results/responseParser';
@@ -57,7 +57,18 @@
 	});
 
 	$effect(() => {
-		if (worksetStore.workset?.jobId !== jobId) void worksetStore.load(jobId);
+		void worksetStore.load(jobId);
+		const onFocus = () => {
+			if (document.visibilityState === 'visible') {
+				void worksetStore.load(jobId);
+			}
+		};
+		window.addEventListener('focus', onFocus);
+		document.addEventListener('visibilitychange', onFocus);
+		return () => {
+			window.removeEventListener('focus', onFocus);
+			document.removeEventListener('visibilitychange', onFocus);
+		};
 	});
 
 	// Tracciamento decisioni utente: 'approved' | 'rejected' | 'pending'
@@ -182,7 +193,8 @@
 	function deduplicateRelations(rels: ExtractedRelation[]): ExtractedRelation[] {
 		const seen = new Set<string>();
 		return rels.filter((r) => {
-			const k = `${r.source_article || ''}_${r.target_article || ''}_${r.target_paragraph || ''}_${r.family || ''}_${r.relation_type || ''}_${(r.evidence || '').slice(0, 30)}`;
+			const actId = r.source_act ? `${(r.source_act as any).type || ''}_${(r.source_act as any).number || ''}_${(r.source_act as any).year || ''}` : '';
+			const k = `${r.entry_index || ''}_${actId}_${r.source_article || ''}_${r.target_article || ''}_${r.target_paragraph || ''}_${r.family || ''}_${r.relation_type || ''}_${(r.evidence || '').slice(0, 40)}`;
 			if (seen.has(k)) return false;
 			seen.add(k);
 			return true;
@@ -238,6 +250,94 @@
 		return { agreed, onlyChatGPT, onlyGemini };
 	});
 
+	function computeUpdateRelationScore(rel: ExtractedRelation, update: any): number {
+		if (!update) return -100;
+		let score = 0;
+
+		const targetClean = String(rel.target_article || '').replace(/[^0-9]/g, '');
+		const text = (update.testo_disposizione || '').toLowerCase();
+		const actHeading = (update.atto_modificante || '').toLowerCase();
+
+		// 1. Articolo bersaglio: TASSATIVO. Se la disposizione non cita l'articolo target, scarto totale (-100)
+		if (targetClean) {
+			let targetFound = false;
+			if (update.target_articles_detected && Array.isArray(update.target_articles_detected)) {
+				const detectedNums = update.target_articles_detected.map((t: string) =>
+					String(t).replace(/[^0-9]/g, '')
+				);
+				if (detectedNums.includes(targetClean)) {
+					score += 20;
+					targetFound = true;
+				}
+			}
+			const targetRegex = new RegExp(`\\b(?:art(?:icolo)?\\.?|articoli)\\s*${targetClean}\\b`, 'i');
+			if (targetRegex.test(text)) {
+				score += 20;
+				targetFound = true;
+			}
+			if (!targetFound) {
+				return -100;
+			}
+		}
+
+		// 2. Atto Modificante (tipo, numero, anno): FONDAMENTALE per non mischiare leggi diverse
+		if (rel.source_act) {
+			const srcNum = rel.source_act.number ? String(rel.source_act.number).trim() : '';
+			const srcYear = rel.source_act.year ? String(rel.source_act.year).trim() : '';
+			const srcType = rel.source_act.type ? String(rel.source_act.type).toLowerCase() : '';
+
+			if (srcNum) {
+				const numRegex = new RegExp(`\\b(?:n\\.?|no?\\.?|numero)\\s*${srcNum}\\b|\\b${srcNum}\\b`, 'i');
+				if (numRegex.test(actHeading)) {
+					score += 40;
+				} else {
+					return -100;
+				}
+			}
+
+			if (srcYear) {
+				if (actHeading.includes(srcYear) || (update.data_pubblicazione && update.data_pubblicazione.includes(srcYear))) {
+					score += 25;
+				} else {
+					return -100;
+				}
+			}
+
+			if (srcType) {
+				if (
+					(srcType.includes('decreto') && actHeading.includes('decreto')) ||
+					(srcType.includes('legge') && actHeading.includes('legge')) ||
+					(srcType.includes('regio') && actHeading.includes('regio'))
+				) {
+					score += 10;
+				}
+			}
+		}
+
+		// 3. Comma o paragrafo specifico
+		const targetParagraph = String(rel.target_paragraph || '').replace(/[^0-9]/g, '');
+		if (targetParagraph) {
+			const commaRegex = new RegExp(`\\b(?:comma|c\\.)\\s*${targetParagraph}\\b`, 'i');
+			if (commaRegex.test(text)) {
+				score += 15;
+			}
+		}
+
+		// 4. Testo di evidenza (senza preambolo boilerplate)
+		if (rel.evidence) {
+			const cleanEv = rel.evidence.toLowerCase().replace(/^ha\s+disposto\s*(?:\([^)]*\))?\s*/i, '').trim();
+			const cleanArt = text.replace(/^ha\s+disposto\s*(?:\([^)]*\))?\s*/i, '').trim();
+			if (cleanEv.length > 8 && cleanArt.length > 8) {
+				const snippet = cleanEv.slice(0, 30);
+				if (cleanArt.includes(snippet)) {
+					score += 25;
+				}
+			}
+		}
+
+		return score;
+	}
+
 	function matchesItemRelation(
 		rel: ExtractedRelation,
 		artNum: string,
@@ -248,46 +348,29 @@
 	): boolean {
 		if (totalBatchItems === 1) return true;
 
+		// Se la relazione contiene un entry_index deterministico
+		if (rel.entry_index && Number.isInteger(rel.entry_index)) {
+			return rel.entry_index === idx + 1;
+		}
+
+		// Per i normali task di articoli di legge (es. Codice Civile)
 		const s = String(rel.source_article || '').trim().toLowerCase();
 		const sNum = s.replace(/[^0-9]/g, '');
 
 		const artNumClean = String(artNum).trim().toLowerCase();
 		const artNumDigits = artNumClean.replace(/[^0-9]/g, '');
 
-		const progrStr = matchingUpdate?.progr ? String(matchingUpdate.progr).trim().toLowerCase() : '';
-
 		// 1. Exact Article Number Match
 		if (sNum && artNumDigits && sNum === artNumDigits) {
 			return true;
 		}
 
-		// 2. Exact Progressive Novella Match
-		if (sNum && progrStr && sNum === progrStr) {
+		// 2. Textual String Match
+		if (s && (s === artNumClean || s === `art. ${artNumClean}`)) {
 			return true;
 		}
 
-		// 3. Textual String Match ("Novella 1", "Progr. 1", "Art. 1")
-		if (s) {
-			if (
-				s === artNumClean ||
-				(progrStr && (s === progrStr || s.includes(`progr. ${progrStr}`) || s.includes(`novella ${progrStr}`)))
-			) {
-				return true;
-			}
-		}
-
-		// 4. Target Article Intersection match
-		if (rel.target_article && matchingUpdate?.target_articles_detected) {
-			const targetClean = String(rel.target_article).replace(/[^0-9]/g, '');
-			const targets = (matchingUpdate.target_articles_detected as string[]).map((t: string) =>
-				String(t).replace(/[^0-9]/g, '')
-			);
-			if (targetClean && targets.includes(targetClean)) {
-				return true;
-			}
-		}
-
-		// 5. Evidence Text Substring match
+		// 3. Evidence Text Substring match
 		if (rel.evidence && articleText && articleText.length > 10) {
 			const evidenceClean = rel.evidence.trim().toLowerCase().slice(0, 30);
 			if (evidenceClean.length > 5 && articleText.toLowerCase().includes(evidenceClean)) {
@@ -305,32 +388,88 @@
 		const totalItems = batch.articleNumbers.length;
 
 		if (isUpdatesTask) {
-			return batch.articleNumbers.map((artNum, idx) => {
-				const matchingUpdate = actUpdates.find(
-					(u) => String(u.progr) === artNum || (u.progr ? String(u.progr) === String(idx + 1) : false)
-				) || actUpdates[idx];
+			const updatesList = batch.articleNumbers.map((artNum, idx) => {
+				const matchingUpdate = actUpdates[idx] || actUpdates.find(
+					(u) => String(u.progr) === artNum
+				);
+
+				const targetsSummary = matchingUpdate?.target_articles_detected?.length
+					? matchingUpdate.target_articles_detected.slice(0, 3).join(', ')
+					: null;
 
 				const itemTitle = matchingUpdate
-					? `Novella Progr. ${matchingUpdate.progr || idx + 1}${matchingUpdate.data_pubblicazione ? ` (G.U. ${matchingUpdate.data_pubblicazione})` : ''}`
+					? `Novella Progr. ${matchingUpdate.progr || idx + 1}${matchingUpdate.data_pubblicazione ? ` (G.U. ${matchingUpdate.data_pubblicazione})` : ''} · Voce #${idx + 1}${targetsSummary ? ` [${targetsSummary}]` : ''}`
 					: `Novella #${artNum}`;
 				const itemSubtitle = matchingUpdate?.atto_modificante || '';
 				const articleText = matchingUpdate?.testo_disposizione || `Testo della novella in caricamento.`;
 				const rubrica = itemSubtitle;
 
-				const finalC = chatGptRels.filter((r) =>
-					matchesItemRelation(r, artNum, idx, matchingUpdate, articleText, totalItems)
-				);
-				const finalG = geminiRels.filter((r) =>
-					matchesItemRelation(r, artNum, idx, matchingUpdate, articleText, totalItems)
-				);
+				return {
+					articleNum: artNum,
+					idx,
+					matchingUpdate,
+					itemTitle,
+					itemSubtitle,
+					articleText,
+					rubrica,
+					finalC: [] as ExtractedRelation[],
+					finalG: [] as ExtractedRelation[]
+				};
+			});
 
+			// Assegnazione deterministica tramite entry_index; fallback al punteggio semantico se assente
+			for (const rel of chatGptRels) {
+				if (rel.entry_index && rel.entry_index >= 1 && rel.entry_index <= updatesList.length) {
+					updatesList[rel.entry_index - 1].finalC.push(rel);
+					continue;
+				}
+
+				let bestIdx = -1;
+				let bestScore = 0;
+
+				for (let i = 0; i < updatesList.length; i++) {
+					const score = computeUpdateRelationScore(rel, updatesList[i].matchingUpdate);
+					if (score > bestScore) {
+						bestScore = score;
+						bestIdx = i;
+					}
+				}
+
+				if (bestIdx >= 0) {
+					updatesList[bestIdx].finalC.push(rel);
+				}
+			}
+
+			for (const rel of geminiRels) {
+				if (rel.entry_index && rel.entry_index >= 1 && rel.entry_index <= updatesList.length) {
+					updatesList[rel.entry_index - 1].finalG.push(rel);
+					continue;
+				}
+
+				let bestIdx = -1;
+				let bestScore = 0;
+
+				for (let i = 0; i < updatesList.length; i++) {
+					const score = computeUpdateRelationScore(rel, updatesList[i].matchingUpdate);
+					if (score > bestScore) {
+						bestScore = score;
+						bestIdx = i;
+					}
+				}
+
+				if (bestIdx >= 0) {
+					updatesList[bestIdx].finalG.push(rel);
+				}
+			}
+
+			return updatesList.map((g) => {
 				const agreed: ExtractedRelation[] = [];
 				const onlyChatGPT: ExtractedRelation[] = [];
 				const onlyGemini: ExtractedRelation[] = [];
 
-				for (const cRel of finalC) {
+				for (const cRel of g.finalC) {
 					const cTgt = (cRel.target_article || '').replace(/[^0-9]/g, '');
-					const matched = finalG.find((gRel) => {
+					const matched = g.finalG.find((gRel) => {
 						const gTgt = (gRel.target_article || '').replace(/[^0-9]/g, '');
 						return (cTgt && gTgt && cTgt === gTgt) || cRel.target_article === gRel.target_article;
 					});
@@ -338,9 +477,9 @@
 					else onlyChatGPT.push(cRel);
 				}
 
-				for (const gRel of finalG) {
+				for (const gRel of g.finalG) {
 					const gTgt = (gRel.target_article || '').replace(/[^0-9]/g, '');
-					const matched = finalC.find((cRel) => {
+					const matched = g.finalC.find((cRel) => {
 						const cTgt = (cRel.target_article || '').replace(/[^0-9]/g, '');
 						return (cTgt && gTgt && cTgt === gTgt) || cRel.target_article === gRel.target_article;
 					});
@@ -348,18 +487,18 @@
 				}
 
 				return {
-					articleNum: artNum,
-					itemTitle,
-					itemSubtitle,
-					articleText,
-					rubrica,
-					artCandidates: (matchingUpdate?.target_articles_detected || []).map((t: string) => ({
-						articleNum: artNum,
+					articleNum: g.articleNum,
+					itemTitle: g.itemTitle,
+					itemSubtitle: g.itemSubtitle,
+					articleText: g.articleText,
+					rubrica: g.rubrica,
+					artCandidates: (g.matchingUpdate?.target_articles_detected || []).map((t: string) => ({
+						articleNum: g.articleNum,
 						text: `art. ${t}`,
 						label: 'Bersaglio Rilevato'
 					})),
-					cForArt: finalC,
-					gForArt: finalG,
+					cForArt: g.finalC,
+					gForArt: g.finalG,
 					agreed,
 					onlyChatGPT,
 					onlyGemini,
@@ -471,6 +610,19 @@
 			.filter((group) => group.agreed.length > 0 || group.onlyChatGPT.length > 0 || group.onlyGemini.length > 0);
 	});
 
+	let unassignedChatGPTRels = $derived.by(() => {
+		if (!isUpdatesTask || !reportChatGPT?.relations) return [];
+		const allAssigned = new Set(articleComparisonGrouped.flatMap((g) => g.cForArt));
+		return (reportChatGPT.relations || []).filter((r) => !allAssigned.has(r));
+	});
+
+	let unassignedGeminiRels = $derived.by(() => {
+		if (!isUpdatesTask || !reportGemini?.relations) return [];
+		const allAssigned = new Set(articleComparisonGrouped.flatMap((g) => g.gForArt));
+		return (reportGemini.relations || []).filter((r) => !allAssigned.has(r));
+	});
+	let unassignedExpanded = $state(false);
+
 	function getDecision(relKey: string): 'approved' | 'rejected' | 'pending' {
 		return relationDecisions[relKey] || 'pending';
 	}
@@ -496,75 +648,44 @@
 		message: ''
 	});
 
-	function approveAllAgreed() {
+	async function approveAllAgreed() {
 		if (!consensusAnalysis) return;
-		confirmState = {
-			isOpen: true,
-			title: 'Conferma Approvazione Concordanti',
-			message: 'Confermi di voler approvare tutte le relazioni concordanti (confermate da entrambi i modelli AI)?',
-			confirmText: '✓ Approva Concordanti',
-			variant: 'emerald',
-			action: () => {
-				for (const artGroup of articleComparisonGrouped) {
-					artGroup.agreed.forEach((rel, aIdx) => {
-						relationDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'approved';
-					});
-				}
-			}
-		};
+		for (const artGroup of articleComparisonGrouped) {
+			artGroup.agreed.forEach((rel, aIdx) => {
+				relationDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'approved';
+			});
+		}
+		await saveReconciledProposal();
 	}
 
-	function approveAll() {
-		confirmState = {
-			isOpen: true,
-			title: 'Conferma Approvazione Totale Batch',
-			message: 'Confermi di voler approvare TUTTE le relazioni trovate da ChatGPT e Gemini per l\'intero batch?',
-			confirmText: '✓ Approva Tutte le Relazioni',
-			variant: 'purple',
-			action: () => {
-				for (const artGroup of articleComparisonGrouped) {
-					artGroup.agreed.forEach((rel, aIdx) => {
-						relationDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'approved';
-					});
-					artGroup.onlyChatGPT.forEach((rel, cIdx) => {
-						relationDecisions[getRelKey(rel, `chatgpt_${artGroup.articleNum}`, cIdx)] = 'approved';
-					});
-					artGroup.onlyGemini.forEach((rel, gIdx) => {
-						relationDecisions[getRelKey(rel, `gemini_${artGroup.articleNum}`, gIdx)] = 'approved';
-					});
-				}
-			}
-		};
+	async function approveAll() {
+		for (const artGroup of articleComparisonGrouped) {
+			artGroup.agreed.forEach((rel, aIdx) => {
+				relationDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'approved';
+			});
+			artGroup.onlyChatGPT.forEach((rel, cIdx) => {
+				relationDecisions[getRelKey(rel, `chatgpt_${artGroup.articleNum}`, cIdx)] = 'approved';
+			});
+			artGroup.onlyGemini.forEach((rel, gIdx) => {
+				relationDecisions[getRelKey(rel, `gemini_${artGroup.articleNum}`, gIdx)] = 'approved';
+			});
+		}
+		await saveReconciledProposal();
 	}
 
-	function approveNovellaGroup(articleNum: string) {
+	async function approveNovellaGroup(articleNum: string) {
 		const artGroup = articleComparisonGrouped.find((g) => g.articleNum === articleNum);
 		if (!artGroup) return;
-
-		const label = artGroup.itemSubtitle
-			? `${artGroup.itemTitle} (${artGroup.itemSubtitle})`
-			: artGroup.itemTitle || `Novella #${articleNum}`;
-
-		const totalRels = artGroup.agreed.length + artGroup.onlyChatGPT.length + artGroup.onlyGemini.length;
-
-		confirmState = {
-			isOpen: true,
-			title: 'Conferma Approvazione Novella',
-			message: `Confermi di voler approvare tutte le ${totalRels} relazioni della ${label}?`,
-			confirmText: '✓ Approva Novella',
-			variant: 'emerald',
-			action: () => {
-				artGroup.agreed.forEach((rel, aIdx) => {
-					relationDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'approved';
-				});
-				artGroup.onlyChatGPT.forEach((rel, cIdx) => {
-					relationDecisions[getRelKey(rel, `chatgpt_${artGroup.articleNum}`, cIdx)] = 'approved';
-				});
-				artGroup.onlyGemini.forEach((rel, gIdx) => {
-					relationDecisions[getRelKey(rel, `gemini_${artGroup.articleNum}`, gIdx)] = 'approved';
-				});
-			}
-		};
+		artGroup.agreed.forEach((rel, aIdx) => {
+			relationDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'approved';
+		});
+		artGroup.onlyChatGPT.forEach((rel, cIdx) => {
+			relationDecisions[getRelKey(rel, `chatgpt_${artGroup.articleNum}`, cIdx)] = 'approved';
+		});
+		artGroup.onlyGemini.forEach((rel, gIdx) => {
+			relationDecisions[getRelKey(rel, `gemini_${artGroup.articleNum}`, gIdx)] = 'approved';
+		});
+		await saveReconciledProposal();
 	}
 
 	function handleConfirmModal() {
@@ -578,8 +699,34 @@
 		confirmState.isOpen = false;
 	}
 
-	function resetDecisions() {
-		relationDecisions = {};
+	async function resetDecisions() {
+		const pendingDecisions: Record<string, 'approved' | 'rejected' | 'pending'> = {};
+		for (const artGroup of articleComparisonGrouped) {
+			artGroup.agreed.forEach((rel, aIdx) => {
+				pendingDecisions[getRelKey(rel, `agreed_${artGroup.articleNum}`, aIdx)] = 'pending';
+			});
+			artGroup.onlyChatGPT.forEach((rel, cIdx) => {
+				pendingDecisions[getRelKey(rel, `chatgpt_${artGroup.articleNum}`, cIdx)] = 'pending';
+			});
+			artGroup.onlyGemini.forEach((rel, gIdx) => {
+				pendingDecisions[getRelKey(rel, `gemini_${artGroup.articleNum}`, gIdx)] = 'pending';
+			});
+		}
+		relationDecisions = pendingDecisions;
+		editedRelations = {};
+		saveSuccess = undefined;
+		saveWarning = undefined;
+
+		// Persiste lo stato resettato su IndexedDB
+		if (worksetStore.workset && batch) {
+			await updateBatch(worksetStore.workset.jobId, batch.id, {
+				relationDecisions: pendingDecisions,
+				editedRelations: {},
+				status: 'awaiting_ai',
+				relations: []
+			});
+			await worksetStore.load(worksetStore.workset.jobId);
+		}
 	}
 
 	let totalBatchRelations = $derived.by(() => {
@@ -602,12 +749,15 @@
 		return Math.max(0, totalBatchRelations - approvedCount - rejectedCount);
 	});
 
-	// Ripristina decisioni e modifiche salvate se il batch è già stato lavorato o salvato
+	let initializedForBatchId = $state<string | null>(null);
+
+	// Ripristina decisioni e modifiche salvate al caricamento del batch
 	$effect(() => {
-		if (batch) {
+		if (batch && batch.id !== initializedForBatchId) {
+			initializedForBatchId = batch.id;
 			if (batch.relationDecisions && Object.keys(batch.relationDecisions).length > 0) {
 				relationDecisions = { ...batch.relationDecisions };
-			} else if (batch.status === 'imported' || (batch.relations && batch.relations.length > 0)) {
+			} else if (batch.status === 'imported' && batch.relations && batch.relations.length > 0) {
 				const newDecisions: Record<string, 'approved' | 'rejected' | 'pending'> = {};
 				for (const artGroup of articleComparisonGrouped) {
 					artGroup.agreed.forEach((rel, aIdx) => {
@@ -632,7 +782,8 @@
 			const approvedRels: ExtractedRelation[] = [];
 
 			const addUnique = (rel: ExtractedRelation) => {
-				const uKey = `${rel.source_article || ''}_${rel.target_article || ''}_${rel.target_paragraph || ''}_${rel.family || ''}_${rel.relation_type || ''}_${(rel.evidence || '').slice(0, 30)}`;
+				const actId = rel.source_act ? `${(rel.source_act as any).type || ''}_${(rel.source_act as any).number || ''}_${(rel.source_act as any).year || ''}` : '';
+				const uKey = `${rel.entry_index || ''}_${actId}_${rel.source_article || ''}_${rel.target_article || ''}_${rel.target_paragraph || ''}_${rel.family || ''}_${rel.relation_type || ''}_${(rel.evidence || '').slice(0, 40)}`;
 				if (!seenKeys.has(uKey)) {
 					seenKeys.add(uKey);
 					approvedRels.push(rel);
@@ -669,7 +820,6 @@
 			saveWarning = await worksetStore.importResponse(batchId, jsonText, 'chatgpt', relationDecisions, editedRelations);
 			await worksetStore.importResponse(batchId, jsonText, 'gemini', relationDecisions, editedRelations);
 
-			await jobsStore.loadDetail(jobId);
 			void activityStore.refresh();
 			saveSuccess = `Batch ${batchId} salvato con successo! La scheda dell'attività Civitas "${worksetStore.workset?.jobTitle || ''}" è stata aggiornata con ${approvedRels.length} relazioni approvate.`;
 		} finally {
@@ -800,26 +950,56 @@
 						<button
 							type="button"
 							onclick={approveAllAgreed}
-							class="px-3 py-1 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold hover:bg-emerald-200 transition-colors cursor-pointer flex items-center gap-1"
+							disabled={saving}
+							class="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-2xs transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
 						>
-							<Check class="w-3.5 h-3.5 text-emerald-700" /> Approva Tutte le Concordanti
+							{#if saving}
+								<Spinner />
+								<span>Salvataggio...</span>
+							{:else}
+								<Check class="w-4 h-4 text-white" />
+								<span>Approva Tutte le Concordanti</span>
+							{/if}
 						</button>
 						<button
 							type="button"
 							onclick={approveAll}
-							class="px-3 py-1 rounded-lg bg-purple-100 text-purple-900 border border-purple-300 font-bold hover:bg-purple-200 transition-colors cursor-pointer flex items-center gap-1"
+							disabled={saving}
+							class="px-3.5 py-1.5 rounded-lg bg-purple-100 text-purple-900 border border-purple-300 font-bold hover:bg-purple-200 transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
 						>
-							<Check class="w-3.5 h-3.5 text-purple-700" /> Approva Tutte le Relazioni
+							{#if saving}
+								<Spinner />
+							{:else}
+								<Check class="w-3.5 h-3.5 text-purple-700" />
+							{/if}
+							<span>Approva Tutte le Relazioni</span>
 						</button>
 						<button
 							type="button"
 							onclick={resetDecisions}
-							class="px-3 py-1 rounded-lg bg-stone-100 text-stone-700 border border-stone-300 font-medium hover:bg-stone-200 transition-colors cursor-pointer flex items-center gap-1"
+							disabled={saving}
+							class="px-3 py-1.5 rounded-lg bg-stone-100 text-stone-700 border border-stone-300 font-medium hover:bg-stone-200 transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
 						>
 							<RotateCcw class="w-3.5 h-3.5 text-stone-600" /> Resetta decisioni
 						</button>
 					</div>
 				</div>
+
+				{#if saveSuccess}
+					<div class="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between text-xs text-emerald-950 font-medium animate-in fade-in">
+						<div class="flex items-center gap-2">
+							<Check class="w-4 h-4 text-emerald-700 shrink-0" />
+							<span>{saveSuccess}</span>
+						</div>
+						<button
+							type="button"
+							onclick={() => router.toJob(jobId)}
+							class="font-bold underline text-emerald-800 hover:text-emerald-950 cursor-pointer ml-3 shrink-0"
+						>
+							Vai alla Scheda Task &rarr;
+						</button>
+					</div>
+				{/if}
 
 				<div class="pt-2 flex gap-3 flex-wrap items-center justify-between bg-purple-50/70 p-3.5 rounded-xl border border-purple-200">
 					<div>
@@ -911,7 +1091,7 @@
 					</div>
 				{:else}
 					{#each filteredArticleComparisonGrouped as artGroup (artGroup.articleNum)}
-					{#if artGroup.agreed.length > 0 || artGroup.onlyChatGPT.length > 0 || artGroup.onlyGemini.length > 0 || artGroup.artCandidates.length > 0}
+					{#if activeFilter === 'all' || artGroup.agreed.length > 0 || artGroup.onlyChatGPT.length > 0 || artGroup.onlyGemini.length > 0 || artGroup.artCandidates.length > 0}
 						<ArticleComparisonGroup
 							{artGroup}
 							{editedRelations}
@@ -930,6 +1110,47 @@
 						/>
 					{/if}
 				{/each}
+				{/if}
+
+				<!-- RELAZIONI NON APPARTENENTI A QUESTO BATCH (ES. OVERFLOW DA PROMPT PRECEDENTI) -->
+				{#if unassignedChatGPTRels.length > 0 || unassignedGeminiRels.length > 0}
+					<div class="p-4 bg-purple-50/60 border border-purple-250 rounded-2xl space-y-2.5 text-xs shadow-2xs">
+						<button
+							type="button"
+							onclick={() => (unassignedExpanded = !unassignedExpanded)}
+							class="w-full flex items-center justify-between text-purple-950 font-bold text-left cursor-pointer hover:underline"
+						>
+							<span class="flex items-center gap-2">
+								<Layers class="w-4 h-4 text-purple-700 shrink-0" />
+								Ulteriori relazioni nella risposta AI non appartenenti a queste 5 disposizioni ({unassignedChatGPTRels.length + unassignedGeminiRels.length})
+							</span>
+							{#if unassignedExpanded}
+								<ChevronUp class="w-4 h-4 text-purple-800" />
+							{:else}
+								<ChevronDown class="w-4 h-4 text-purple-800" />
+							{/if}
+						</button>
+						<p class="text-[11px] text-purple-900/80">
+							Queste relazioni estratte dall'AI fanno riferimento ad altri articoli bersaglio dell'atto non inclusi nelle disposizioni di questo batch. Vengono isolate qui per non inquinare le schede delle disposizioni attuali.
+						</p>
+						{#if unassignedExpanded}
+							<div class="space-y-2 pt-2 max-h-[300px] overflow-y-auto">
+								{#each unassignedChatGPTRels as rel, idx (`extra_c_${idx}`)}
+									<div class="p-2.5 bg-white rounded-lg border border-purple-200 text-xs flex items-center justify-between gap-2">
+										<div class="min-w-0">
+											<span class="font-bold text-purple-950 block font-mono">
+												🎯 Target: art. {rel.target_article || '-'}{rel.target_paragraph ? `, comma ${rel.target_paragraph}` : ''} ({rel.relation_type || 'MODIFICA'})
+											</span>
+											{#if rel.evidence}
+												<span class="text-[11px] text-stone-600 truncate block italic">"{rel.evidence}"</span>
+											{/if}
+										</div>
+										<Badge variant="purple">Altro Articolo</Badge>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				{/if}
 			</div>
 

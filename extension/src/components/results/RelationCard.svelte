@@ -53,6 +53,12 @@
 
 	let srcLinkStatusInfo = $derived(getRelationLinkStatus(currentRel, true, allLocalWorksets, articles, currentJobTitle, isUpdatesTask));
 	let tgtLinkStatusInfo = $derived(getRelationLinkStatus(currentRel, false, allLocalWorksets, articles, currentJobTitle, isUpdatesTask));
+
+	function formatArticleLabel(val?: string | null): string {
+		if (!val) return 'Rinvio';
+		const cleaned = val.replace(/^(art\.|articolo|art)\s*/i, '').trim();
+		return cleaned ? `Art. ${cleaned}` : val;
+	}
 </script>
 
 <div class="bg-white border rounded-2xl overflow-hidden shadow-xs mb-3 transition-all duration-200 {cardBorderClass}">
@@ -84,7 +90,7 @@
 								<span class="text-xs text-stone-600 font-mono block">{currentRel.source_act.article}</span>
 							{/if}
 						{:else if currentRel.source_article}
-							<span class="font-bold text-indigo-950 font-mono text-sm block">Art. {currentRel.source_article}</span>
+							<span class="font-bold text-indigo-950 font-mono text-sm block">{formatArticleLabel(currentRel.source_article)}</span>
 						{:else}
 							<span class="text-stone-600 font-mono text-xs block">{articleTitle || 'Sorgente generica'}</span>
 						{/if}
@@ -169,7 +175,7 @@
 				</span>
 				<div class="min-w-0 space-y-1 w-full">
 					<span class="font-bold text-stone-900 font-mono text-base leading-tight block">
-						Art. {currentRel.target_article || 'Rinvio'}
+						{formatArticleLabel(currentRel.target_article)}
 						{#if currentRel.target_paragraph}
 							<span class="text-xs font-normal text-stone-500 ml-1">· comma {currentRel.target_paragraph}</span>
 						{/if}

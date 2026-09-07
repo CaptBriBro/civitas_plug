@@ -76,13 +76,25 @@ export function rebuildBatches(
   const consumed = new Set(imported.flatMap((batch) => batch.articleNumbers));
 
   if (workset.actUpdates && workset.actUpdates.length > 0) {
-    const remainingUpdates = workset.actUpdates.filter(
-      (_, idx) => !consumed.has(String(idx))
-    );
-    const fresh = buildBatches([], options, remainingUpdates).map((batch, index) => ({
-      ...batch,
-      id: `batch-${String(imported.length + index + 1).padStart(3, '0')}`,
-    }));
+    const remainingWithIndex = workset.actUpdates
+      .map((update, origIdx) => ({ update, origIdx }))
+      .filter(({ origIdx }) => !consumed.has(String(origIdx)));
+
+    const size = Math.max(1, options.batchSize ?? (workset.actUpdates.length > 0 ? 10 : 5));
+    const now = new Date().toISOString();
+    const fresh: WorksetBatch[] = [];
+
+    for (let i = 0; i < remainingWithIndex.length; i += size) {
+      const slice = remainingWithIndex.slice(i, i + size);
+      fresh.push({
+        id: `batch-${String(imported.length + fresh.length + 1).padStart(3, '0')}`,
+        articleNumbers: slice.map((item) => String(item.origIdx)),
+        status: 'pending',
+        relations: [],
+        updatedAt: now,
+      });
+    }
+
     return [...imported, ...fresh];
   }
 
@@ -122,8 +134,17 @@ export function articlesForBatch(workset: Workset, batch: WorksetBatch): LegalAr
 
 export function actUpdatesForBatch(workset: Workset, batch: WorksetBatch): any[] {
   if (!workset || !batch || !workset.actUpdates) return [];
-  const wanted = new Set(batch.articleNumbers.map(n => String(n).trim()));
+  const wantedIndices = new Set(
+    batch.articleNumbers
+      .map((n) => parseInt(String(n).trim(), 10))
+      .filter((n) => !isNaN(n))
+  );
+  const matched = workset.actUpdates.filter((_, idx) => wantedIndices.has(idx));
+  if (matched.length > 0) return matched;
+
+  // Fallback per vecchi batch che contenevano progr o numeri 1-based
+  const wantedStr = new Set(batch.articleNumbers.map((n) => String(n).trim()));
   return workset.actUpdates.filter(
-    (u, idx) => wanted.has(String(idx)) || wanted.has(String(idx + 1)) || (u.progr ? wanted.has(String(u.progr).trim()) : false)
+    (u, idx) => wantedStr.has(String(idx)) || (u.progr ? wantedStr.has(String(u.progr).trim()) : false)
   );
 }

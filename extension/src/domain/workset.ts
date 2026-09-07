@@ -25,6 +25,7 @@ export interface ActUpdateEntry {
 }
 
 export interface ExtractedRelation {
+  entry_index?: number;
   source_article?: string;
   target_article?: string;
   target_paragraph?: string;

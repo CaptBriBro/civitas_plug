@@ -80,4 +80,44 @@ describe('parseAiResponse', () => {
     const parsed = parseAiResponse(JSON.stringify(RELATIONS.relations));
     expect(parsed.relations).toHaveLength(1);
   });
+
+  it('estrae correttamente entry_index e modifying_act/source_act per le novelle', () => {
+    const raw = JSON.stringify({
+      relations: [
+        {
+          entry_index: 2,
+          target_article: '8',
+          target_paragraph: '1',
+          relation_type: 'MODIFICATION',
+          modifying_act: {
+            type: 'LEGGE',
+            number: '399',
+            year: '1984'
+          },
+          evidence: 'ha disposto la modifica del comma 1'
+        },
+        {
+          voce: '1',
+          target_article: '8',
+          relation_type: 'ABROGATION',
+          source_act: {
+            type: 'REGIO_DECRETO',
+            number: '504',
+            year: '1942'
+          }
+        }
+      ]
+    });
+    const parsed = parseAiResponse(raw);
+    expect(parsed.relations).toHaveLength(2);
+    expect(parsed.relations[0]?.entry_index).toBe(2);
+    expect(parsed.relations[0]?.target_article).toBe('8');
+    expect(parsed.relations[0]?.source_act).toEqual({ type: 'LEGGE', number: '399', year: '1984' });
+    expect(parsed.relations[0]?.modifying_act).toEqual({ type: 'LEGGE', number: '399', year: '1984' });
+    expect(parsed.relations[0]?.extra).toBeUndefined();
+
+    expect(parsed.relations[1]?.entry_index).toBe(1);
+    expect(parsed.relations[1]?.target_article).toBe('8');
+    expect(parsed.relations[1]?.source_act).toEqual({ type: 'REGIO_DECRETO', number: '504', year: '1942' });
+  });
 });

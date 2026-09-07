@@ -27,8 +27,8 @@ describe('parseTree', () => {
 
   it('riconosce le versioni storiche e marca come vigente la più recente', () => {
     const versions = tree.articles[0]!.versions;
-    expect(versions.map((v) => v.versionLabel)).toEqual(['orig.', 'agg.1']);
-    expect(versions.find((v) => v.isCurrent)?.versionLabel).toBe('agg.1');
+    expect(versions.map((v) => v.versionLabel)).toEqual(['orig.', 'agg.1', 'vigente']);
+    expect(versions.find((v) => v.isCurrent)?.versionLabel).toBe('vigente');
   });
 
   it('lascia vigente l\'originale se non esistono versioni successive', () => {

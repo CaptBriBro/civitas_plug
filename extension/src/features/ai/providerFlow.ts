@@ -35,7 +35,7 @@ function buildLocalFallbackPrompt(workset: Workset, batch: WorksetBatch): string
 		const updates = actUpdatesForBatch(workset, batch);
 		const updatesText = updates
 			.map((u, idx) => {
-				let head = `[${idx + 1}] Aggiornamento Progr. ${u.progr || idx + 1}`;
+				let head = `=== VOCE AGGIORNAMENTO #${idx + 1} (entry_index: ${idx + 1}) ===\nAggiornamento Progr. ${u.progr || idx + 1}`;
 				if (u.data_pubblicazione) head += ` (Pubblicazione: ${u.data_pubblicazione})`;
 				if (u.atto_modificante) head += `\nAtto Modificante: ${u.atto_modificante}`;
 				return `${head}\nDisposizione Novellante: "${u.testo_disposizione}"`;
@@ -46,12 +46,14 @@ function buildLocalFallbackPrompt(workset: Workset, batch: WorksetBatch): string
 			'Sei un assistente specializzato nell\'analisi formale e strutturata della cronistoria delle modifiche legislative italiane (Aggiornamenti all\'Atto Normattiva).\n\n' +
 			'Il tuo compito è analizzare ciascuna riga di aggiornamento/novella normativa fornita ed estrarre le relazioni giuridiche puntuali tra l\'ATTO MODIFICANTE (fonte della modifica) e le SINGOLE DISPOSIZIONI BERSAGLIO (articoli, commi abrogati, modificati, sostituiti o inseriti).\n\n' +
 			'REGOLE TASSATIVE DI ESTRAZIONE:\n' +
-			'1. Identifica l\'Atto Modificante con gli estremi normativi esatti (tipo, numero, anno, data).\n' +
-			'2. Per ciascuna disposizione dell\'atto bersaglio modificata o abrogata, genera una specifica relazione con target_article, target_paragraph, relation_type (ABROGATION, MODIFICATION, REPLACEMENT, INSERTION) ed evidence.\n\n' +
+			'1. `entry_index`: NUMERO IDENTIFICATIVO DELLA VOCE DI AGGIORNAMENTO (es. 1 per VOCE #1, 2 per VOCE #2). CAMPO OBBLIGATORIO: associa in modo deterministico ciascuna relazione alla voce di provenienza.\n' +
+			'2. Identifica l\'Atto Modificante con gli estremi normativi esatti (tipo, numero, anno, data).\n' +
+			'3. Per ciascuna disposizione dell\'atto bersaglio modificata o abrogata, genera una specifica relazione con entry_index, target_article, target_paragraph, relation_type (ABROGATION, MODIFICATION, REPLACEMENT, INSERTION) ed evidence.\n\n' +
 			'OUTPUT SCHEMA (JSON OBBLIGATORIO):\n' +
 			'{\n' +
 			'  "relations": [\n' +
 			'    {\n' +
+			'      "entry_index": 1,\n' +
 			'      "object_kind": "EFFECT",\n' +
 			'      "family": "AMENDMENT",\n' +
 			'      "relation_type": "ABROGATION",\n' +
@@ -163,10 +165,12 @@ export async function startAnalysis(
 		let expiresAt = new Date(Date.now() + 3_600_000).toISOString();
 
 		try {
+			const isUpdates = Boolean(workset.actUpdates && workset.actUpdates.length > 0);
 			const response = await resolvePrompt({
 				jobId: workset.jobId,
 				provider,
 				installationId,
+				task: isUpdates ? 'act_updates_relation_extraction' : undefined,
 				articles: promptArticlesPayload,
 			});
 
